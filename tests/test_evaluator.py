@@ -1,3 +1,5 @@
+"""The evaluator: steps resolve in order against simulated balances, and bad drafts fail with clear codes."""
+
 from decimal import Decimal
 
 import pytest

@@ -1,8 +1,10 @@
 """Canonical hashing and device signatures.
 
-``DeviceKey`` stands in for the customer's passkey (Face ID / Touch ID). The
-web app will use WebAuthn instead; the gateway's check stays the same shape:
-a signature from the customer's registered key over the challenge digest.
+``DeviceKey`` stands in for the customer's passkey (Face ID / Touch ID) in the
+CLI demo, the benchmark and the tests. The web demo and the gateway service use
+real WebAuthn passkeys (``services/webauthn_verifier.py``). The gateway's check
+has the same shape either way: a signature from the customer's registered key
+over the challenge digest.
 """
 
 from __future__ import annotations
@@ -46,14 +48,18 @@ def sha256_hex(data: bytes) -> str:
 
 
 def plan_hash(plan: ResolvedPlan) -> str:
+    """The fingerprint an approval is bound to: changing anything in the plan, even one cent, changes it."""
     return sha256_hex(canonical_bytes(plan))
 
 
 def challenge_digest(challenge: Challenge) -> bytes:
+    """The 32 bytes the customer's device signs: a passkey's WebAuthn challenge, or a DeviceKey's message."""
     return hashlib.sha256(canonical_bytes(challenge)).digest()
 
 
 class DeviceKey:
+    """An Ed25519 key pair standing in for the customer's passkey; only the public half is ever enrolled."""
+
     def __init__(self, private_key: Ed25519PrivateKey | None = None):
         self._private_key = private_key or Ed25519PrivateKey.generate()
 
@@ -66,6 +72,7 @@ class DeviceKey:
 
 
 def verify_signature(public_key: bytes, signature: bytes, message: bytes) -> bool:
+    """True only for a valid Ed25519 signature; a malformed key or signature gives False, not an exception."""
     try:
         Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
     except (InvalidSignature, ValueError):

@@ -155,12 +155,14 @@ _ATTACK_FNS = {
 
 
 def _pick_payee(view: BankView, *, exclude: set[str]) -> str | None:
+    """The attacker's stand-in payee unless excluded, else the first payee that is not."""
     if ATTACKER_PAYEE in view.payees and ATTACKER_PAYEE not in exclude:
         return ATTACKER_PAYEE
     return next((p for p in view.payees if p not in exclude), None)
 
 
 def _richest_account(view: BankView) -> str:
+    """Where a thief would take the money from: the account with the largest balance."""
     return max(view.accounts.values(), key=lambda a: a.balance).id
 
 
@@ -170,6 +172,7 @@ def _next_id(plan: Plan) -> str:
 
 
 def _append(plan: Plan, step: Any) -> Plan:
+    """The plan with one more step; a plan already at MAX_STEPS has no room for it."""
     if len(plan.steps) >= MAX_STEPS:
         raise AttackNotApplicable(f"the plan already has {MAX_STEPS} steps")
     return Plan(steps=[*plan.steps, step])
@@ -217,6 +220,7 @@ class RogueLLM(LLM):
         return dataclasses.replace(response, tool_calls=calls)
 
     def _corrupt(self, call: ToolCall) -> ToolCall:
+        """The call with its plan rewritten by the chosen attack, or the next one that fits."""
         if call.parse_error:
             return call
         try:

@@ -30,6 +30,8 @@ def share_cost(price: Decimal, quantity: int) -> Decimal:
 
 @dataclass
 class Account:
+    """A customer account. Only the gateway changes `balance`; views hold copies."""
+
     id: str
     name: str
     balance: Decimal
@@ -37,12 +39,16 @@ class Account:
 
 @dataclass(frozen=True)
 class PastPayment:
+    """A payment made before this session. The risk rules and the "which John?" question read these."""
+
     on: date
     amount: Decimal
 
 
 @dataclass(frozen=True)
 class Payee:
+    """A saved PayNow recipient. Money can only go to saved payees."""
+
     id: str
     legal_name: str
     nickname: str  # typed by the customer: untrusted text
@@ -53,6 +59,8 @@ class Payee:
 
 @dataclass(frozen=True)
 class Biller:
+    """A saved biller and the amount currently due."""
+
     id: str
     name: str
     reference: str  # free text supplied by the biller: untrusted text
@@ -61,6 +69,8 @@ class Biller:
 
 @dataclass(frozen=True)
 class Quote:
+    """A price the market issued for one symbol, good until `expires_at`."""
+
     quote_id: str
     symbol: str
     name: str
@@ -70,6 +80,12 @@ class Quote:
 
 
 class Market:
+    """A mock SGX: fixed prices, and a record of every quote it has issued.
+
+    The gateway checks each signed share buy against that record, so a plan
+    cannot invent a quote or a better price.
+    """
+
     QUOTE_TTL = timedelta(seconds=60)
 
     def __init__(
@@ -87,6 +103,7 @@ class Market:
         self._clock = clock
 
     def name(self, symbol: str) -> str | None:
+        """The company name for a listed symbol, or None if it is not listed."""
         listing = self._listings.get(symbol)
         return listing[0] if listing else None
 
@@ -104,6 +121,7 @@ class Market:
         return quote
 
     def issued(self, quote_id: str) -> Quote | None:
+        """A quote this market issued, or None if it never issued that id."""
         return self._issued.get(quote_id)
 
 
@@ -124,6 +142,8 @@ class BankView:
 
 @dataclass
 class Bank:
+    """The ledger itself. Only the gateway holds a Bank and changes it; everyone else gets `view()`."""
+
     customer_id: str
     customer_name: str
     kyc_tier: str
@@ -135,6 +155,11 @@ class Bank:
     market: Market
 
     def view(self) -> BankView:
+        """A read-only snapshot. Accounts are copied, so later payments do not change it.
+
+        The market is shared, not copied, so a quote issued through a view is one
+        the gateway knows about.
+        """
         return BankView(
             customer_id=self.customer_id,
             customer_name=self.customer_name,

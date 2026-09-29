@@ -1,3 +1,5 @@
+"""The quarantine: what bank data a model may see, label sanitising, injection scanning and payee matching."""
+
 import base64
 import dataclasses
 import json
@@ -302,6 +304,7 @@ def test_spans_index_into_the_original_text():
 
 
 def _tag_smuggle(text: str) -> str:
+    """`text` rewritten in invisible Unicode tag characters, a known way to hide instructions."""
     return "".join(chr(0xE0000 + ord(c)) for c in text)
 
 

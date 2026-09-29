@@ -1,3 +1,5 @@
+"""The confirmation: wording and read-back, policy notes, and refusing anything bank records cannot vouch for."""
+
 import hashlib
 import re
 from datetime import UTC, datetime, timedelta
@@ -414,5 +416,6 @@ def test_every_policy_code_has_a_plain_spoken_template(bank, code):
 
 @pytest.fixture
 def rich_bank(bank: Bank) -> Bank:
+    """The seed customer with enough in Savings to hit every limit."""
     bank.accounts["SAV"].balance = Decimal("200000.00")
     return bank

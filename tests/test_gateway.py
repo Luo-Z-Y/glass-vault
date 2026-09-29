@@ -1,3 +1,8 @@
+"""The gateway: a signed plan executes once.
+
+Unsigned, altered, replayed, forged and expired approvals are refused, and every refusal is logged.
+"""
+
 from decimal import Decimal
 
 import pytest

@@ -81,6 +81,13 @@ class TraceEvent:
 
 @dataclass(frozen=True)
 class Outcome:
+    """The result of one customer turn; `kind` decides which other fields are set.
+
+    confirm: plan, confirmation, policy and challenge. clarify: clarification.
+    frozen, refused and held carry the plan if it got that far, and `trace` always
+    ends with the stage that decided.
+    """
+
     kind: OutcomeKind
     message: str
     plan: ResolvedPlan | None = None
@@ -105,7 +112,7 @@ class GatewayPort(Protocol):
 
 
 class LocalGatewayPort:
-    """In-process port for the CLI demo and the benchmark; the HTTP port replaces it in the services."""
+    """In-process port for the web demo and the benchmark; `GatewayClient` (services/gateway_api.py) is the HTTP one."""
 
     def __init__(self, gateway: Gateway):
         self._gateway = gateway
@@ -128,6 +135,8 @@ class LocalGatewayPort:
 
 
 class _CountingLLM:
+    """Counts model calls, for `Outcome.llm_calls` and the benchmark's cost figures."""
+
     def __init__(self, llm: LLM):
         self._llm = llm
         self.name = llm.name
@@ -149,12 +158,19 @@ class _Stop(Exception):
 
 
 class Pipeline:
+    """The agent zone and the control plane. It reaches the gateway only through a GatewayPort, which cannot execute."""
+
     def __init__(self, gateway: GatewayPort, drafter_llm: LLM, validator_llm: LLM):
         self._gateway = gateway
         self._drafter_llm = drafter_llm
         self._validator_llm = validator_llm
 
     def handle(self, dialogue: Sequence[Turn]) -> Outcome:
+        """Take the dialogue so far and return one Outcome for the customer's latest turn.
+
+        A stopped request comes back as an Outcome, not an exception, and its trace
+        shows which stage stopped it.
+        """
         dialogue = _current_request(dialogue)
         drafter, validator = _CountingLLM(self._drafter_llm), _CountingLLM(self._validator_llm)
         trace: list[TraceEvent] = []
@@ -248,6 +264,11 @@ class Pipeline:
     # --- control-plane checks ------------------------------------------------
 
     def _resolve(self, plan: Plan, view: BankView, now: datetime, trace: list[TraceEvent], *, stage: str) -> ResolvedPlan:
+        """Resolve the draft, turning an EvaluationError into the outcome the customer should get.
+
+        Not enough money is refused and too little for one share is a question; any
+        other error means the draft named something that does not exist, so it is frozen.
+        """
         try:
             resolved = resolve(plan, view, now=now)
         except EvaluationError as e:
@@ -384,10 +405,13 @@ class Pipeline:
 
 # --- helpers -------------------------------------------------------------------
 
+# Part of the fixed question `_check_sources` asks. Finding it in the agent's turns
+# means the customer was already asked, so the question is not repeated.
 SOURCE_QUESTION = "which you're moving money into"
 
 
 def _describe(step: Any, view: BankView) -> str:
+    """How the source-account question names a step, from bank records."""
     match step:
         case EquityBuy():
             return f"the {view.market.name(step.symbol) or step.symbol} shares"
@@ -397,6 +421,7 @@ def _describe(step: Any, view: BankView) -> str:
             return f"the {view.billers[step.biller_id].name} bill"
     return f"step {step.id}"
 
+# Too common in bank-record names to count as naming one: "Joint Account" needs "joint".
 _GENERIC_WORDS = {"account", "group", "holdings", "bank", "the", "my", "of", "and", "ltd", "limited"}
 
 
@@ -409,6 +434,7 @@ def _agent_text(dialogue: Sequence[Turn]) -> str:
 
 
 def _norm(text: str) -> str:
+    """How evidence is matched against the transcript: lower case, punctuation other than $.,% as spaces."""
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s$.,%]", " ", text.lower())).strip()
 
 
@@ -419,10 +445,13 @@ def _name_mentioned(name: str, said: str) -> bool:
 
 
 def _mentions_amount(text: str, value: Decimal) -> bool:
+    """True if the agent already asked about this exact amount, so the customer is not asked twice."""
     return f"S${value:,.2f}" in text
 
 
+# An agent turn reporting that a request went through; everything up to it is finished business.
 _EXECUTED = re.compile(r"\bhas been executed\b|^Done\b", re.I)
+# "Both my bills", "all of my bills": every saved biller at once.
 _ALL_BILLS = re.compile(r"\b(both|all)\s+(of\s+)?(my\s+)?bills\b", re.I)
 
 
@@ -437,6 +466,7 @@ def _current_request(dialogue: Sequence[Turn]) -> list[Turn]:
     return list(dialogue[last_done + 1:])
 
 
+# In a reply to the agent's question, these words take back the amounts it asked about.
 _NEGATION = re.compile(r"\b(no|nope|not|wrong|cancel|instead|meant)\b", re.I)
 
 
@@ -474,10 +504,12 @@ def _likelier_reading(value: Decimal, payee: Any) -> Decimal | None:
 
 
 def _is_outlier(amount: Decimal, payee: Any) -> bool:
+    """More than 10 times this payee's largest past payment (the multiple the risk rules also use)."""
     return bool(payee.history) and amount > 10 * max(p.amount for p in payee.history)
 
 
 def _which_payee(phrase: str, ids: Sequence[str], view: BankView) -> Clarification:
+    """A "which payee?" question from bank records, with each payee's last payment to tell them apart."""
     options = []
     for payee_id in ids:
         payee = view.payees[payee_id]

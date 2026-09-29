@@ -58,6 +58,8 @@ STATUS = {
 
 
 class GatewayError(Exception):
+    """A refusal: `code` names the check that failed and `status` is its HTTP status (see STATUS)."""
+
     def __init__(self, code: str, message: str):
         super().__init__(f"{STATUS[code]} {code}: {message}")
         self.code = code
@@ -67,6 +69,8 @@ class GatewayError(Exception):
 
 @dataclass(frozen=True)
 class Receipt:
+    """Proof that one step executed; the same receipts go into the EXECUTED audit entry."""
+
     reference: str
     step_id: str
     summary: str
@@ -74,12 +78,16 @@ class Receipt:
 
 @dataclass(frozen=True)
 class Execution:
+    """One executed step and when it ran; the risk rules read these for velocity and daily limits."""
+
     at: datetime
     step: ResolvedStep
 
 
 @dataclass(frozen=True)
 class _Pending:
+    """A challenge awaiting the customer's approval, with the gateway's copy of the plan it covers."""
+
     challenge: Challenge
     plan: ResolvedPlan  # the gateway's own validated copy
 
@@ -122,6 +130,13 @@ def _safe_plan_hash(plan: Any) -> str:
 
 
 class Gateway:
+    """The only component that changes balances; the module docstring lists what it checks.
+
+    `policy=None` turns the risk rules off (the plain gateway the benchmark gives
+    the naive baseline). Without `step_up`, step-up decisions are not enforced.
+    `clock` lets tests and the benchmark fix the time.
+    """
+
     def __init__(
         self,
         bank: Bank,
@@ -159,6 +174,7 @@ class Gateway:
         return self._audit
 
     def now(self) -> datetime:
+        """The gateway's clock: quote and challenge expiry and the risk rules' time windows all use it."""
         return self._clock()
 
     def history(self, since: datetime | None = None) -> tuple[Execution, ...]:
@@ -191,6 +207,13 @@ class Gateway:
         script_hash: str | None = None,
         policy_decision_id: str | None = None,
     ) -> Challenge:
+        """Check `plan` and return a challenge for the customer's device to sign.
+
+        The plan must parse strictly, name every destination as bank records do, be
+        affordable at live balances and quotes, and pass the risk rules (deny and
+        hold raise). The gateway keeps its own copy under the nonce, and that copy
+        is what executes. Refusals are audited as CHALLENGE_REFUSED.
+        """
         with self._lock:
             now = self._clock()
             try:
@@ -261,6 +284,7 @@ class Gateway:
             pass  # never let an audit failure mask the original rejection
 
     def _execute(self, plan: ResolvedPlan | None, nonce: Any, signature: Any, step_up_code: Any) -> list[Receipt]:
+        """The approval checks in order, each with its own error code, then the execution itself."""
         now = self._clock()
         if not isinstance(nonce, str) or not nonce or not signature:
             raise GatewayError("SIGNATURE_REQUIRED", "no customer approval attached")

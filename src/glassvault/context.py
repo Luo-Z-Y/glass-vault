@@ -42,6 +42,8 @@ PROMPT_NOTE = (
 
 @dataclass(frozen=True)
 class InjectionSignal:
+    """One stretch of text that reads like an instruction to a model, and where it is."""
+
     kind: str  # e.g. "instruction_override", "role_play", "system_marker"
     text: str
     start: int
@@ -60,6 +62,8 @@ class QuarantinedText:
 
 @dataclass(frozen=True)
 class AgentContext:
+    """What the drafter and the validator are given, plus the originals withheld from them."""
+
     prompt_data: dict  # JSON-serialisable; the ONLY bank data put in prompts
     placeholders: Mapping[str, str]  # "<REF_1>" -> original untrusted text; never sent to an LLM
     quarantine: tuple[QuarantinedText, ...] = ()
@@ -70,6 +74,8 @@ class AgentContext:
 
 @dataclass(frozen=True)
 class PayeeMention:
+    """Words in a transcript that refer to one or more saved payees."""
+
     text: str  # the customer's words, exactly as written
     start: int
     end: int
@@ -80,6 +86,7 @@ class PayeeMention:
 
 
 def build_context(view: BankView) -> AgentContext:
+    """The only bank data a model may see, with untrusted text swapped for <REF_n> handles."""
     q = _Quarantine()
     prompt_data = {
         "currency": "SGD",
@@ -137,6 +144,8 @@ def untrusted_leaks(prompt: str, context: AgentContext) -> list[str]:
 
 
 class _Quarantine:
+    """Hands out <REF_n> placeholders and records what was withheld while one context is built."""
+
     def __init__(self) -> None:
         self.placeholders: dict[str, str] = {}
         self.records: list[QuarantinedText] = []
@@ -144,6 +153,7 @@ class _Quarantine:
     def hide(
         self, text: str, source: str, reason: Literal["third_party_text", "suspicious_label"]
     ) -> str:
+        """Withhold `text` behind a new placeholder, recording where it came from and why."""
         if not text.strip():
             return ""
         placeholder = f"<REF_{len(self.placeholders) + 1}>"
@@ -161,6 +171,7 @@ class _Quarantine:
 
 
 def _payee_entry(payee: Payee, q: _Quarantine) -> dict:
+    """One payee as a model sees it: sanitised names, the masked proxy, and a summary of past payments."""
     paid = sorted(p.amount for p in payee.history)
     # Words the customer may use for this payee ("ma" for Mum), from our own fixed table.
     aliases = _relationship_aliases(_token_norms(payee.nickname))[:8]
@@ -263,6 +274,7 @@ def _label_char(c: str) -> bool:
 
 
 def _cut(text: str, signals: Sequence[InjectionSignal]) -> str:
+    """Blank out each signal's span with spaces, so every other character keeps its position."""
     chars = list(text)
     for s in signals:
         chars[s.start:s.end] = [" "] * (s.end - s.start)
@@ -270,6 +282,7 @@ def _cut(text: str, signals: Sequence[InjectionSignal]) -> str:
 
 
 def _truncate(label: str, max_len: int) -> str:
+    """Cut to `max_len`, at a word break if there is one in the second half."""
     if len(label) <= max_len:
         return label
     cut = label[:max_len]
@@ -321,6 +334,7 @@ def _scan(text: str, data_field: bool, depth: int) -> list[InjectionSignal]:
     return _merge(found, text)
 
 
+# Four or more letters with separators between them: "i g n o r e", "s.y.s.t.e.m".
 _LETTER_SPACED = re.compile(r"(?<![^\W_])(?:[^\W_][ .\-_*·•|/\\]{1,2}){3,}[^\W_](?![^\W_])")
 
 
@@ -550,6 +564,7 @@ def _is_control(c: str) -> bool:
 
 
 def _hidden_text(text: str) -> list[InjectionSignal]:
+    """Runs of invisible or control characters, except the harmless ones (see `_benign_invisible`)."""
     out = []
     i, n = 0, len(text)
     while i < n:
@@ -619,6 +634,7 @@ def _is_letterlike(c: str) -> bool:
 
 
 def _script(c: str) -> str:
+    """The script a letter comes from, for spotting words that mix Latin with Cyrillic or Greek."""
     if c.isascii():
         return "latin"
     name = unicodedata.name(c, "")
@@ -697,6 +713,7 @@ def _skeleton(
     return "".join(chars), where
 
 
+# 16 or more characters from the standard or URL-safe base64 alphabet, standing alone.
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9+/_=-])")
 
 
@@ -711,6 +728,7 @@ def _encoded_instructions(text: str, depth: int) -> list[InjectionSignal]:
 
 
 def _decode_base64_text(blob: str) -> str | None:
+    """The blob decoded, if it is mostly printable UTF-8 with a space in it (so, prose); else None."""
     body = blob.rstrip("=")
     altchars = b"-_" if ("-" in body or "_" in body) else None
     try:
@@ -820,6 +838,8 @@ def payee_is_mentioned(payee_id: str, transcript: str, view: BankView) -> bool:
 
 @dataclass(frozen=True)
 class _PayeeIndex:
+    """Every name each payee answers to (legal name, nickname, relationship words), as sets of folded words."""
+
     order: tuple[str, ...]
     aliases: tuple[tuple[str, tuple[frozenset[str], ...]], ...]
     max_window: int
@@ -839,6 +859,7 @@ class _PayeeIndex:
         return cls(tuple(pid for pid, _ in entries), tuple(entries), min(longest, 8))
 
     def match(self, norms: Sequence[str]) -> tuple[str, ...]:
+        """The payees a phrase could mean. Initials alone ("J L") match no one."""
         if not any(not _is_initial(t) for t in norms):
             return ()
         return tuple(pid for pid, aliases in self.aliases if any(_covers(a, norms) for a in aliases))
@@ -863,6 +884,10 @@ def _is_initial(token: str) -> bool:
 
 
 def _relationship_aliases(nickname: Sequence[str]) -> list[str]:
+    """Every word for the relationship a nickname names: "Mum" also answers to mom, ma, 妈妈 and the rest.
+
+    In-laws get none, so "Mother-in-law" is never taken to mean "mother".
+    """
     if _contains(nickname, ["in", "law"]) or "inlaw" in nickname:
         return []
     out: list[str] = []
@@ -882,6 +907,7 @@ def _contains(seq: Sequence[str], sub: Sequence[str]) -> bool:
 
 
 def _mentions(tokens: Sequence[_Token], text: str, index: _PayeeIndex) -> list[PayeeMention]:
+    """Payee mentions from left to right, taking the longest run of joined words at each position."""
     out: list[PayeeMention] = []
     i = 0
     while i < len(tokens):
@@ -905,6 +931,11 @@ def _mentions(tokens: Sequence[_Token], text: str, index: _PayeeIndex) -> list[P
 
 
 def _counts_as_mention(window: Sequence[_Token], previous: _Token | None) -> bool:
+    """Whether a one-word match really refers to a payee.
+
+    Weak words ("ma", "pa") and single letters need "my" or a payment verb before
+    them; names that are also everyday words ("May", "Will") need a capital or "my".
+    """
     if len(window) > 1:
         return True
     token = window[0]
@@ -956,6 +987,7 @@ def _tokenise(text: str) -> list[_Token]:
 
 
 def _fold_token(raw: str) -> str:
+    """Drop a possessive "'s" and any other apostrophes: "mum's" -> "mum"."""
     for suffix in ("'s", "’s"):
         if raw.endswith(suffix) and len(raw) > len(suffix):
             raw = raw[: -len(suffix)]
@@ -963,6 +995,7 @@ def _fold_token(raw: str) -> str:
 
 
 def _joins(gap: str, previous: str) -> bool:
+    """Whether two words stay one phrase: only spaces or hyphens between them, or the dot after an initial."""
     if all(ch.isspace() or ch in "-‐–" for ch in gap):
         return True
     return _is_initial(previous) and gap.strip() == "."

@@ -41,6 +41,8 @@ class LLMConfigError(LLMError):
 
 @dataclass(frozen=True)
 class ToolCall:
+    """One tool call from the model. If its arguments were unusable, `arguments` is empty and `parse_error` says why."""
+
     name: str
     arguments: dict[str, Any]
     id: str | None = None
@@ -49,6 +51,8 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class LLMResponse:
+    """What a model returned: its text, its tool calls, and token usage if the provider reports it."""
+
     text: str | None
     tool_calls: tuple[ToolCall, ...] = ()
     usage: dict[str, Any] = field(default_factory=dict)
@@ -56,6 +60,8 @@ class LLMResponse:
 
 @runtime_checkable
 class LLM(Protocol):
+    """Anything that answers a chat: a real endpoint, ScriptedLLM, OfflineLLM or RogueLLM."""
+
     name: str
 
     def chat(
@@ -146,6 +152,9 @@ class OpenAICompatLLM(LLM):
     Some compatible endpoints reject ``tool_choice="required"``. The first
     such rejection downgrades this client to ``"auto"``; the drafter's repair
     round then handles a model that answers in text instead of calling a tool.
+
+    `extra_body` carries provider-specific request fields, such as DeepSeek's
+    switch for thinking mode. Tests pass a fake `client` instead of a real one.
     """
 
     def __init__(
@@ -271,6 +280,8 @@ ScriptStep = LLMResponse | Callable[[list[dict]], LLMResponse]
 
 @dataclass(frozen=True)
 class RecordedCall:
+    """One call a ScriptedLLM received, kept for tests to inspect."""
+
     messages: list[dict]
     tools: list[dict] | None
     tool_choice: str | dict | None
@@ -326,4 +337,5 @@ def tool_response(
 
 
 def text_response(text: str) -> LLMResponse:
+    """A reply with text and no tool call, like a model that ignored the tools."""
     return LLMResponse(text=text)

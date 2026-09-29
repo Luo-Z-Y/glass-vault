@@ -1,3 +1,5 @@
+"""The amount grammar: ways of saying money, numbers that are not money, fractions, and likely mishearings."""
+
 import random
 from decimal import Decimal
 from fractions import Fraction

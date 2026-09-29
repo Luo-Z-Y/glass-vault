@@ -115,6 +115,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+// The challenge being approved, and the last assertion (kept so step 3 can replay it).
 const state = { challenge: null, plan: null, options: null, nonce: null, assertion: null };
 
 // --- encoding helpers ---------------------------------------------------------
@@ -142,6 +143,7 @@ async function sha256(text) {
 }
 const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
 
+// The server sends WebAuthn's binary fields as base64url; the browser API wants ArrayBuffers.
 function creationOptions(o) {
   return { ...o, challenge: b64u.dec(o.challenge), user: { ...o.user, id: b64u.dec(o.user.id) },
            excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })) };
@@ -150,6 +152,7 @@ function requestOptions(o) {
   return { ...o, challenge: b64u.dec(o.challenge),
            allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })) };
 }
+// And back again: the browser's credential as the base64url JSON the server verifies.
 function registrationJSON(c) {
   return { id: c.id, rawId: b64u.enc(c.rawId), type: c.type,
            authenticatorAttachment: c.authenticatorAttachment || null,
@@ -302,6 +305,8 @@ $("approve").onclick = async () => {
 
 // --- 3. replay ----------------------------------------------------------------
 $("copy").onclick = () => navigator.clipboard.writeText(JSON.stringify(state.assertion));
+// Sends the same assertion again. The gateway must refuse: the nonce is used up, and each
+// signed assertion is accepted only once.
 $("replay").onclick = async () => {
   try {
     await execute(state.assertion);

@@ -54,6 +54,8 @@ Outcome = Literal["allow", "step_up", "hold", "deny"]
 
 @dataclass(frozen=True)
 class TierLimits:
+    """Limits on payments to others for one KYC tier. Own-account transfers never count."""
+
     per_txn: Decimal  # largest single payment to others
     daily: Decimal  # payments to others per bank day (Singapore time)
 
@@ -114,10 +116,12 @@ RULE_OUTCOMES: Mapping[str, Outcome] = MappingProxyType({
 
 
 def tier_limits(tier: str) -> TierLimits:
+    """The limits for `tier`; an unknown tier gets the tightest ones."""
     return TIER_LIMITS.get(tier, TIER_LIMITS[FALLBACK_TIER])
 
 
 def decision_id(plan: ResolvedPlan, outcome: str, reasons: Sequence[PolicyReason]) -> str:
+    """Binds a decision to one exact plan: a hash over the plan hash, the outcome and every reason."""
     return sha256_hex(canonical_bytes({
         "plan_hash": plan_hash(plan),
         "outcome": outcome,
@@ -163,6 +167,8 @@ def outcome_for(reasons: Sequence[PolicyReason]) -> Outcome:
 
 @dataclass(frozen=True)
 class _Facts:
+    """Everything the rules read, gathered once so every rule sees the same times and limits."""
+
     plan: ResolvedPlan
     view: BankView
     now: datetime  # timezone-aware
@@ -188,6 +194,7 @@ class _Facts:
         return [s for s in self.plan.steps if s.type in types]
 
     def paid_to(self, payee_id: str) -> list[tuple[datetime, Decimal]]:
+        """PayNow payments this gateway executed to one payee; older ones are in `Payee.history`."""
         return [(at, s.amount) for at, s in self.history if s.type == "paynow" and s.to == payee_id]
 
 
@@ -200,11 +207,13 @@ def _aware(at: datetime) -> datetime:
 
 
 def _customer_mismatch(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny a plan prepared for a different customer."""
     if f.plan.customer_id != f.view.customer_id:
         yield _reason("CUSTOMER_MISMATCH", None, "this request was prepared for a different customer")
 
 
 def _unknown_counterparty(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny a step naming an account, payee, biller or share the bank does not know."""
     for s in f.plan.steps:
         if not _on_profile(s, f.view):
             yield _reason(
@@ -214,6 +223,7 @@ def _unknown_counterparty(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _kyc_not_verified(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny payments to others and share buys until identity verification (KYC) is complete."""
     if f.view.kyc_status != KYC_VERIFIED and f.steps(OUTGOING_TYPES):
         yield _reason(
             "KYC_NOT_VERIFIED", None,
@@ -223,6 +233,7 @@ def _kyc_not_verified(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _investment_not_eligible(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny share buys without a passed investment suitability check (CKA)."""
     if not f.view.investment_eligible and f.steps(frozenset({"equity_buy"})):
         yield _reason(
             "INVESTMENT_NOT_ELIGIBLE", None,
@@ -231,6 +242,7 @@ def _investment_not_eligible(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _per_txn_limit(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny any single payment to others above the tier's per-transaction limit."""
     for s in f.steps(THIRD_PARTY_TYPES):
         if s.amount > f.limits.per_txn:
             yield _reason(
@@ -241,6 +253,7 @@ def _per_txn_limit(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _daily_limit(f: _Facts) -> Iterator[PolicyReason]:
+    """Deny if today's payments to others, executed plus planned, would pass the tier's daily limit."""
     spent_today = sum(
         (s.amount for at, s in f.history
          if s.type in THIRD_PARTY_TYPES and at.astimezone(BANK_TZ).date() == f.today),
@@ -258,6 +271,7 @@ def _daily_limit(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _new_payee_cooling(f: _Facts) -> Iterator[PolicyReason]:
+    """Hold any payment to a payee added less than NEW_PAYEE_COOLING ago."""
     for payee, steps in _by_payee(f):
         if f.now < _cooling_ends(payee.added_on):
             yield _reason(
@@ -268,6 +282,7 @@ def _new_payee_cooling(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _new_payee_limit(f: _Facts) -> Iterator[PolicyReason]:
+    """Hold if a new payee would receive more than NEW_PAYEE_LIMIT within NEW_PAYEE_DAYS."""
     for payee, steps in _by_payee(f):
         if not _is_new(payee, f):
             continue
@@ -283,11 +298,13 @@ def _new_payee_limit(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _velocity(f: _Facts) -> Iterator[PolicyReason]:
+    """Hold if this plan would make VELOCITY_MAX_STEPS or more payments to others within VELOCITY_WINDOW."""
     since = f.now - VELOCITY_WINDOW
     recent = sum(1 for at, s in f.history if s.type in THIRD_PARTY_TYPES and at >= since)
     planned = f.steps(THIRD_PARTY_TYPES)
     total = recent + len(planned)
     if planned and total >= VELOCITY_MAX_STEPS:
+        # The planned step that brings the count to VELOCITY_MAX_STEPS.
         crossing = planned[max(0, VELOCITY_MAX_STEPS - recent - 1)]
         yield _reason(
             "VELOCITY", crossing.id,
@@ -297,6 +314,10 @@ def _velocity(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _amount_outlier(f: _Facts) -> Iterator[PolicyReason]:
+    """Step up when one recipient gets more than OUTLIER_MULTIPLE times what is usual for them.
+
+    For a payee the baseline is their largest past payment; for a biller, the amount due.
+    """
     for key, steps in _group(f.plan.steps, THIRD_PARTY_TYPES).items():
         kind, target = key
         if kind == "paynow":
@@ -325,6 +346,7 @@ def _amount_outlier(f: _Facts) -> Iterator[PolicyReason]:
 
 
 def _step_up_amount(f: _Facts) -> Iterator[PolicyReason]:
+    """Step up if STEP_UP_THRESHOLD or more leaves the customer's accounts, share buys included."""
     outgoing = f.steps(OUTGOING_TYPES)
     crossing = _first_crossing(outgoing, Decimal(0), lambda total: total >= STEP_UP_THRESHOLD)
     if crossing is not None:
@@ -360,6 +382,7 @@ def _reason(code: str, step_id: str | None, message: str) -> PolicyReason:
 
 
 def _on_profile(s: ResolvedStep, view: BankView) -> bool:
+    """True if the bank knows both the step's source account and its destination."""
     if s.from_account not in view.accounts:
         return False
     match s.type:
@@ -395,6 +418,7 @@ def _group(
 
 
 def _by_payee(f: _Facts) -> Iterator[tuple[Payee, list[ResolvedStep]]]:
+    """Each saved payee this plan pays, with its PayNow steps."""
     for (_, payee_id), steps in _group(f.plan.steps, frozenset({"paynow"})).items():
         payee = f.view.payees.get(payee_id)
         if payee is not None:
@@ -419,6 +443,7 @@ def _cooling_ends(added_on: date) -> datetime:
 
 
 def _is_new(payee: Payee, f: _Facts) -> bool:
+    """New if added within NEW_PAYEE_DAYS, or if nothing was paid to it before that window."""
     if (f.today - payee.added_on).days < NEW_PAYEE_DAYS:
         return True
     window_start = f.now - timedelta(days=NEW_PAYEE_DAYS)

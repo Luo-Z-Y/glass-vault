@@ -15,12 +15,16 @@ from typing import Annotated, Literal, Union
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+# "t1" to "t99", numbered in the order the customer said the steps.
 StepId = Annotated[str, Field(pattern=r"^t[1-9][0-9]?$")]
+# A positive S$ amount in whole cents: a fraction of a cent is rejected, never rounded.
 Money = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
 Balance = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=2)]
 
 
 class _Frozen(BaseModel):
+    """Immutable, and an unknown field is an error, so nothing extra can ride along with a plan."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
@@ -28,6 +32,8 @@ class _Frozen(BaseModel):
 
 
 class FixedAmount(_Frozen):
+    """An S$ amount the customer stated ("a grand" is 1000.00)."""
+
     kind: Literal["fixed"] = "fixed"
     value: Money
 
@@ -72,6 +78,11 @@ AmountExpr = Annotated[Union[FixedAmount, FractionOfStep, FractionOfBalance], Fi
 
 
 class _Step(_Frozen):
+    """What every draft step carries: its id, and the customer's words behind each field.
+
+    The provenance check refuses a draft whose evidence is not in the transcript.
+    """
+
     id: StepId
     evidence: dict[str, str] = Field(
         default_factory=dict,
@@ -80,6 +91,8 @@ class _Step(_Frozen):
 
 
 class OwnTransfer(_Step):
+    """Move money between two of the customer's own accounts."""
+
     type: Literal["own_transfer"] = "own_transfer"
     from_account: str
     to_account: str
@@ -87,6 +100,8 @@ class OwnTransfer(_Step):
 
 
 class PayNowTransfer(_Step):
+    """Pay a saved payee by PayNow."""
+
     type: Literal["paynow"] = "paynow"
     from_account: str
     payee_id: str
@@ -94,6 +109,8 @@ class PayNowTransfer(_Step):
 
 
 class BillPayment(_Step):
+    """Pay a saved biller."""
+
     type: Literal["bill_payment"] = "bill_payment"
     from_account: str
     biller_id: str
@@ -101,6 +118,8 @@ class BillPayment(_Step):
 
 
 class EquityBuy(_Step):
+    """Buy SGX shares with up to `notional` in cash; the evaluator works out how many shares."""
+
     type: Literal["equity_buy"] = "equity_buy"
     funding_account: str
     symbol: str
@@ -115,6 +134,11 @@ StepType = Literal["own_transfer", "paynow", "bill_payment", "equity_buy"]
 
 
 class Plan(_Frozen):
+    """The drafter's proposal: 1 to 6 steps, in the order the customer said them.
+
+    It is never signed as it stands: the evaluator resolves it into a ResolvedPlan first.
+    """
+
     steps: list[Step] = Field(min_length=1, max_length=6)
 
     @model_validator(mode="after")
@@ -129,6 +153,8 @@ class Plan(_Frozen):
 
 
 class EquityFill(_Frozen):
+    """How a share buy is filled: the quote it uses, at what price, and how many whole shares."""
+
     symbol: str
     quote_id: str
     price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=4)]
@@ -137,6 +163,12 @@ class EquityFill(_Frozen):
 
 
 class ResolvedStep(_Frozen):
+    """One step with every value fixed.
+
+    `amount` is the exact cash leaving `from_account`. `to_display` is the
+    destination's name from bank records; the gateway re-derives it and refuses a mismatch.
+    """
+
     id: StepId
     type: StepType
     from_account: str
@@ -155,6 +187,12 @@ class ResolvedStep(_Frozen):
 
 
 class ResolvedPlan(_Frozen):
+    """What the customer signs and the gateway executes.
+
+    `balances_after` is what the customer is shown; the gateway refuses to execute
+    if, by then, live balances would end up anywhere else.
+    """
+
     customer_id: str
     steps: tuple[ResolvedStep, ...] = Field(min_length=1, max_length=6)
     balances_after: dict[str, Balance]
@@ -211,12 +249,16 @@ class Clarification(_Frozen):
 
 
 class PolicyReason(_Frozen):
+    """One risk rule that fired, and the step at which its threshold was crossed."""
+
     code: str = Field(description="e.g. STEP_UP_AMOUNT, NEW_PAYEE_LIMIT, VELOCITY")
     step_id: str | None = None
     message: str
 
 
 class PolicyDecision(_Frozen):
+    """The risk rules' verdict on one exact plan: the most severe outcome, and every rule that fired."""
+
     id: str = Field(description="sha256 over the plan hash and the reasons")
     outcome: Literal["allow", "step_up", "hold", "deny"]
     reasons: tuple[PolicyReason, ...] = ()
