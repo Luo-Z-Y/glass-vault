@@ -26,6 +26,7 @@ VERB = r"(?:pay|send|move|transfer|put|give|buy|top\s+up|invest)"
 CLAUSE_SPLIT = re.compile(rf"(?:;|[,.](?!\d)|\bthen\b|\balso\b|\band\b(?=\s+(?:then\s+)?{VERB}\b))", re.I)
 SHARES = re.compile(r"\b(shares?|stocks?|invest)\b", re.I)
 BILL = re.compile(r"\bbill\b", re.I)
+ALL_BILLS = re.compile(r"\b(?:both|all)\s+(?:of\s+)?(?:my\s+)?bills\b", re.I)
 STOPWORDS = {"send", "pay", "give", "transfer", "move", "to", "my", "the", "a", "for", "please", "dollars",
              "dollar", "bucks", "sgd", "s", "and", "some", "money", "via", "paynow", "on", "of", "it"}
 
@@ -91,6 +92,11 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
             source = steps[-1]["to_account"] if steps and steps[-1]["type"] == "own_transfer" else "SAV"
             steps.append({"id": step_id, "type": "equity_buy", "from_account": source, "symbol": symbol,
                           "amount": amount, "evidence": {**evidence, "symbol": said}})
+        elif (every := ALL_BILLS.search(clause)) is not None:
+            for biller in view.billers.values():
+                steps.append({"id": f"t{len(steps) + 1}", "type": "bill_payment", "from_account": "SAV",
+                              "biller_id": biller.id, "amount": {"full_amount_due": True},
+                              "evidence": {"biller_id": every.group(0)}})
         elif BILL.search(clause):
             biller, said = _biller(clause, view)
             if biller is None:

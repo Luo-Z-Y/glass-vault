@@ -160,6 +160,9 @@ class Challenge(_Frozen):
         default=None, description="sha256 of the confirmation script the customer saw/heard"
     )
     policy_decision_id: str | None = None
+    step_up_required: bool = Field(
+        default=False, description="the gateway's own risk check wants a second factor for this approval"
+    )
 
 
 # --- Conversation ------------------------------------------------------------

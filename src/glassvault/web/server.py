@@ -36,6 +36,7 @@ from ..pipeline import LocalGatewayPort, Outcome, Pipeline
 from ..rogue import ATTACKS, RogueLLM
 from ..schema import Challenge, FixedAmount, PayNowTransfer, Plan, Turn
 from ..services.webauthn_verifier import WebAuthnVerifier
+from ..stepup import DigitalToken, StepUpVerifier
 
 STATIC = Path(__file__).parent / "static"
 PORT = int(os.environ.get("GV_PORT", "8000"))
@@ -75,6 +76,7 @@ class Demo:
     gateway: Gateway
     verifier: DemoVerifier
     simulated_phone: DeviceKey
+    token: DigitalToken  # the customer's step-up token (simulated separate device)
     drafter: LLM
     validator: LLM
     llm_mode: str
@@ -113,11 +115,13 @@ def new_demo() -> Demo:
     audit = AuditLog()
     webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock)
     verifier = DemoVerifier(webauthn, DeviceKeyVerifier())
-    gateway = Gateway(bank, audit, verifier=verifier, clock=clock)
+    token, step_up = DigitalToken(), StepUpVerifier()
+    step_up.enrol(bank.customer_id, token)
+    gateway = Gateway(bank, audit, verifier=verifier, step_up=step_up, clock=clock)
     phone = DeviceKey()  # the simulated phone, used until a real passkey is enrolled
     gateway.register_device(bank.customer_id, phone.public_bytes)
     drafter, validator, mode = _llms(bank)
-    return Demo(bank, audit, gateway, verifier, phone, drafter, validator, mode)
+    return Demo(bank, audit, gateway, verifier, phone, token, drafter, validator, mode)
 
 
 demo = new_demo()
@@ -152,10 +156,13 @@ def outcome_json(o: Outcome) -> dict[str, Any]:
         data["clarification"] = o.clarification.model_dump(mode="json")
     if o.confirmation:
         data["confirmation"] = o.confirmation.model_dump(mode="json")
+        # The renderer lists the payment steps first, then any risk notices.
+        data["step_count"] = len(o.plan.steps) if o.plan else len(o.confirmation.lines)
     if o.policy:
         data["policy"] = o.policy.model_dump(mode="json")
     if o.challenge:
-        data["challenge"] = {"nonce": o.challenge.nonce, "expires_at": o.challenge.expires_at.isoformat()}
+        data["challenge"] = {"nonce": o.challenge.nonce, "expires_at": o.challenge.expires_at.isoformat(),
+                             "step_up_required": o.challenge.step_up_required}
         if demo.verifier.has_passkey(demo.bank.customer_id):
             data["webauthn"] = demo.verifier.webauthn.authentication_options(
                 demo.bank.customer_id, challenge_digest(o.challenge))
@@ -232,6 +239,7 @@ class ApproveRequest(BaseModel):
     nonce: str
     assertion: dict[str, Any] | None = None
     simulated: bool = False
+    step_up_code: str | None = None
 
 
 @app.post("/api/approve")
@@ -244,7 +252,7 @@ def approve(req: ApproveRequest):
     else:
         proof = None
     try:
-        receipts = demo.gateway.execute(nonce=req.nonce, signature=proof)
+        receipts = demo.gateway.execute(nonce=req.nonce, signature=proof, step_up_code=req.step_up_code)
     except GatewayError as e:
         return error(e)
     demo.last_approval = (req.nonce, proof)
@@ -260,6 +268,12 @@ def _webauthn_fields(assertion: dict[str, Any]) -> dict[str, Any]:
         "response": {k: response[k] for k in ("clientDataJSON", "authenticatorData", "signature", "userHandle")
                      if k in response},
     }
+
+
+@app.get("/api/token/{nonce}")
+def token_code(nonce: str) -> dict[str, Any]:
+    """The simulated digital token: in real life a separate device the agent can't reach."""
+    return {"code": demo.token.code(nonce)}
 
 
 # --- Passkey enrolment ------------------------------------------------------------------

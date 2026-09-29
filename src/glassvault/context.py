@@ -162,10 +162,13 @@ class _Quarantine:
 
 def _payee_entry(payee: Payee, q: _Quarantine) -> dict:
     paid = sorted(p.amount for p in payee.history)
+    # Words the customer may use for this payee ("ma" for Mum), from our own fixed table.
+    aliases = _relationship_aliases(_token_norms(payee.nickname))[:8]
     return {
         "id": payee.id,
         "legal_name": q.label(payee.legal_name, f"payees.{payee.id}.legal_name", 80),
         "nickname": q.label(payee.nickname, f"payees.{payee.id}.nickname", 40),
+        **({"also_called": aliases} if aliases else {}),
         "paynow_proxy": _masked_proxy(payee, q),
         "added_on": payee.added_on.isoformat(),
         "last_paid": last_paid_summary(payee),

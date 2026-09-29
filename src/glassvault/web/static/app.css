@@ -274,6 +274,29 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .notice.step-up { background: var(--amber-soft); border-color: #fde68a; color: #78350f; }
 .notice.hold { background: var(--amber-soft); border-color: var(--amber); color: #78350f; font-weight: 600; }
 
+.stepup {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--amber-soft);
+  border: 1px solid #fde68a;
+  font-size: 12.5px;
+  color: #78350f;
+}
+.stepup label { display: block; font-weight: 600; margin-bottom: 6px; }
+.stepup-row { display: flex; gap: 8px; }
+.stepup input {
+  width: 8.5em;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #fcd34d;
+  background: #fff;
+  font-family: var(--mono);
+  letter-spacing: 0.2em;
+}
+.stepup .ghost { flex: 1; font-size: 12px; padding: 6px 8px; }
+.token-code { margin-top: 6px; font-family: var(--mono); font-size: 13px; font-weight: 600; }
+
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .primary {
   flex: 1 1 100%;

@@ -154,6 +154,7 @@ class Pipeline:
         self._validator_llm = validator_llm
 
     def handle(self, dialogue: Sequence[Turn]) -> Outcome:
+        dialogue = _current_request(dialogue)
         drafter, validator = _CountingLLM(self._drafter_llm), _CountingLLM(self._validator_llm)
         trace: list[TraceEvent] = []
         try:
@@ -325,7 +326,7 @@ class Pipeline:
                                          ClarifyOption(label="No, cancel", value="cancel")),
                             ))
                 case BillPayment() if step.biller_id in view.billers:
-                    if not _name_mentioned(view.billers[step.biller_id].name, said):
+                    if not (_name_mentioned(view.billers[step.biller_id].name, said) or _ALL_BILLS.search(said)):
                         freeze(f"{step.id}: the customer never mentioned {view.billers[step.biller_id].name}")
                 case OwnTransfer() if step.to_account in view.accounts:
                     if not _name_mentioned(view.accounts[step.to_account].name, said):
@@ -362,6 +363,21 @@ def _name_mentioned(name: str, said: str) -> bool:
 
 def _mentions_amount(text: str, value: Decimal) -> bool:
     return f"S${value:,.2f}" in text
+
+
+_EXECUTED = re.compile(r"\bhas been executed\b|^Done\b", re.I)
+_ALL_BILLS = re.compile(r"\b(both|all)\s+(of\s+)?(my\s+)?bills\b", re.I)
+
+
+def _current_request(dialogue: Sequence[Turn]) -> list[Turn]:
+    """Only the turns since the last executed request.
+
+    Money already sent must not count as "said" for the next request, or a drafter
+    could repeat a payment and still pass provenance and the validator.
+    """
+    last_done = max((i for i, t in enumerate(dialogue) if t.role == "agent" and _EXECUTED.search(t.text)),
+                    default=-1)
+    return list(dialogue[last_done + 1:])
 
 
 _NEGATION = re.compile(r"\b(no|nope|not|wrong|cancel|instead|meant)\b", re.I)

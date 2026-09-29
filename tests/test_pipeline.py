@@ -101,3 +101,26 @@ def test_a_correction_supersedes_the_earlier_amount(pipeline):
     corrected = talk(pipeline, "Send mum 6000", "Sorry, I meant six hundred")
     assert corrected.kind == "frozen"
     assert any("never mentioned" in e.detail for e in corrected.trace if not e.ok)
+
+
+def test_both_bills_is_enough_provenance(pipeline):
+    o = talk(pipeline, "Pay both my bills")
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    assert sorted(s.to for s in o.plan.steps) == ["SINGTEL", "SP_GROUP"]
+
+
+def test_an_executed_request_does_not_carry_into_the_next(pipeline):
+    dialogue = [
+        Turn(role="customer", text="Send mum 500"),
+        Turn(role="agent", text="Done. You approved it and it has been executed."),
+        Turn(role="customer", text="Also pay my Singtel bill"),
+    ]
+    o = pipeline.handle(dialogue)
+    assert o.kind == "confirm" and [s.to for s in o.plan.steps] == ["SINGTEL"]
+
+
+def test_llm_sees_relationship_aliases(bank):
+    from glassvault.context import build_context
+
+    mum = next(p for p in build_context(bank.view()).prompt_data["payees"] if p["id"] == "P_MUM")
+    assert "ma" in mum["also_called"] and "mother" in mum["also_called"]

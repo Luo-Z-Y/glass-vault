@@ -89,15 +89,35 @@ function renderOutcome(o) {
 
 function renderConfirm(o) {
   const card = $("#confirm-tpl").content.firstElementChild.cloneNode(true);
-  const n = o.confirmation.lines.length;
+  const n = o.step_count ?? o.confirmation.lines.length;
   card.querySelector(".confirm-title").textContent = `Confirm ${n} ${n === 1 ? "instruction" : "instructions"}`;
   const list = card.querySelector(".confirm-lines");
-  for (const line of o.confirmation.lines) list.appendChild(el("li", "", line));
+  // Payment steps only; the risk notices below come from the same policy decision.
+  for (const line of o.confirmation.lines.slice(0, n)) list.appendChild(el("li", "", line));
 
   const policy = card.querySelector(".confirm-policy");
   for (const r of o.policy?.reasons || []) {
     const cls = o.policy.outcome === "step_up" ? "step-up" : "hold";
     policy.appendChild(el("div", `notice ${cls}`, r.message));
+  }
+
+  if (o.challenge?.step_up_required) {
+    const box = el("div", "stepup");
+    box.appendChild(el("label", "", "Extra check: enter the 6-digit code from your digital token"));
+    const row = el("div", "stepup-row");
+    const code = el("input");
+    Object.assign(code, { inputMode: "numeric", maxLength: 6, placeholder: "••••••", autocomplete: "one-time-code" });
+    const show = el("button", "ghost token", "Show token (simulated)");
+    const shown = el("div", "token-code");
+    shown.hidden = true;
+    show.addEventListener("click", async () => {
+      const { code: c } = await api(`/api/token/${o.challenge.nonce}`);
+      shown.textContent = `Digital token: ${c}`;
+      shown.hidden = false;
+    });
+    row.append(code, show);
+    box.append(row, shown);
+    policy.after(box);
   }
 
   const approve = card.querySelector(".approve");
@@ -231,7 +251,7 @@ async function approveChallenge(o, card) {
   const btn = card.querySelector(".approve");
   btn.disabled = true;
   try {
-    let body = { nonce: o.challenge.nonce };
+    let body = { nonce: o.challenge.nonce, step_up_code: card.querySelector(".stepup input")?.value || null };
     if (state.passkey.registered) {
       const cred = await navigator.credentials.get({ publicKey: requestOptions(o.webauthn) });
       body.assertion = assertionToJSON(cred);

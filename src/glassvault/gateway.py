@@ -33,6 +33,7 @@ from .crypto import challenge_digest, plan_hash, verify_signature
 from .evaluator import destination_label
 from .policy import evaluate_policy
 from .schema import Challenge, PolicyDecision, ResolvedPlan, ResolvedStep
+from .stepup import MAX_ATTEMPTS, StepUpVerifier
 
 PolicyFn = Callable[..., PolicyDecision]
 
@@ -40,7 +41,9 @@ STATUS = {
     "MALFORMED_PLAN": 400,
     "SIGNATURE_REQUIRED": 401,
     "SIGNATURE_INVALID": 401,
+    "STEP_UP_REQUIRED": 401,
     "PAYLOAD_HASH_MISMATCH": 403,
+    "STEP_UP_LOCKED": 403,
     "POLICY_DENIED": 403,
     "UNKNOWN_CHALLENGE": 404,
     "DEVICE_ALREADY_REGISTERED": 409,
@@ -126,6 +129,7 @@ class Gateway:
         *,
         verifier: ApprovalVerifier | None = None,
         policy: PolicyFn | None = evaluate_policy,
+        step_up: StepUpVerifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         challenge_ttl: timedelta = timedelta(minutes=2),
     ):
@@ -134,6 +138,8 @@ class Gateway:
         self._verifier = verifier or DeviceKeyVerifier()
         # The gateway re-runs the risk rules itself: a compromised control plane cannot skip them.
         self._policy = policy
+        # Second factor for "step_up" decisions. Without a verifier, step-up is flagged but not enforced.
+        self._step_up = step_up
         self._clock = clock
         self._ttl = challenge_ttl
         self._lock = threading.RLock()
@@ -190,7 +196,7 @@ class Gateway:
             try:
                 checked = self._check_plan(plan)
                 self._simulate(checked, now)
-                self._check_policy(checked, now, policy_decision_id)
+                decision = self._check_policy(checked, now, policy_decision_id)
             except GatewayError as e:
                 self._audit.append(
                     "CHALLENGE_REFUSED", {"code": e.code, "plan_hash": _safe_plan_hash(plan)}, at=now
@@ -203,6 +209,7 @@ class Gateway:
                 expires_at=now + self._ttl,
                 script_hash=script_hash,
                 policy_decision_id=policy_decision_id,
+                step_up_required=bool(decision and decision.outcome == "step_up" and self._step_up),
             )
             self._pending[challenge.nonce] = _Pending(challenge, checked)
             self._audit.append(
@@ -219,16 +226,22 @@ class Gateway:
             return pending.plan if pending else None
 
     def execute(
-        self, plan: ResolvedPlan | None = None, *, nonce: str | None = None, signature: Any = None
+        self,
+        plan: ResolvedPlan | None = None,
+        *,
+        nonce: str | None = None,
+        signature: Any = None,
+        step_up_code: str | None = None,
     ) -> list[Receipt]:
         """Execute the plan stored under `nonce` if `signature` approves it.
 
         `plan` is optional; if given, it must hash to what the customer approved.
         `signature` is whatever the verifier accepts: raw bytes, or a WebAuthn assertion.
+        `step_up_code` is the digital-token code, needed when the challenge says step_up_required.
         """
         with self._lock:
             try:
-                return self._execute(plan, nonce, signature)
+                return self._execute(plan, nonce, signature, step_up_code)
             except GatewayError as e:
                 self._audit_rejection(e.code, nonce, plan)
                 raise
@@ -247,7 +260,7 @@ class Gateway:
         except Exception:
             pass  # never let an audit failure mask the original rejection
 
-    def _execute(self, plan: ResolvedPlan | None, nonce: Any, signature: Any) -> list[Receipt]:
+    def _execute(self, plan: ResolvedPlan | None, nonce: Any, signature: Any, step_up_code: Any) -> list[Receipt]:
         now = self._clock()
         if not isinstance(nonce, str) or not nonce or not signature:
             raise GatewayError("SIGNATURE_REQUIRED", "no customer approval attached")
@@ -264,6 +277,13 @@ class Gateway:
             raise GatewayError("SIGNATURE_INVALID", "signature is not from the customer's device")
         if plan is not None and _safe_plan_hash(plan) != challenge.plan_hash:
             raise GatewayError("PAYLOAD_HASH_MISMATCH", "plan differs from what the customer approved")
+        if challenge.step_up_required and self._step_up is not None:
+            if not self._step_up.verify(challenge.customer_id, nonce, step_up_code):
+                if step_up_code is not None and self._step_up.record_failure(nonce) >= MAX_ATTEMPTS:
+                    del self._pending[nonce]
+                    self._consumed.add(nonce)
+                    raise GatewayError("STEP_UP_LOCKED", "too many wrong token codes; this approval is void")
+                raise GatewayError("STEP_UP_REQUIRED", "enter the code from your digital token")
 
         # The approval is genuine: it is used up now, whether or not execution succeeds.
         del self._pending[nonce]
@@ -271,7 +291,9 @@ class Gateway:
 
         stored = pending.plan
         new_balances = self._simulate(stored, now)
-        self._check_policy(stored, now, challenge.policy_decision_id)
+        decision = self._check_policy(stored, now, challenge.policy_decision_id)
+        if decision is not None and decision.outcome == "step_up" and self._step_up and not challenge.step_up_required:
+            raise GatewayError("STALE_PLAN", "risk changed since approval; extra verification is now needed")
         receipts = [
             Receipt(f"GV{next(self._receipt_ids):08d}", s.id, f"S${s.amount:,.2f} to {s.to_display}")
             for s in stored.steps
@@ -292,20 +314,21 @@ class Gateway:
         self._executions.extend(Execution(now, s) for s in stored.steps)
         return receipts
 
-    def _check_policy(self, plan: ResolvedPlan, now: datetime, claimed_id: str | None) -> None:
+    def _check_policy(self, plan: ResolvedPlan, now: datetime, claimed_id: str | None) -> PolicyDecision | None:
         """Deny and hold outcomes stop here, whatever the control plane said.
 
         `claimed_id` (the control plane's decision) is only recorded in the challenge;
         the gateway's own evaluation is what counts.
         """
         if self._policy is None:
-            return
+            return None
         decision = self._policy(plan, self._bank.view(), now=now, history=self.history())
         reasons = "; ".join(r.message for r in decision.reasons)
         if decision.outcome == "deny":
             raise GatewayError("POLICY_DENIED", reasons)
         if decision.outcome == "hold":
             raise GatewayError("POLICY_HOLD", reasons)
+        return decision
 
     def _check_plan(self, plan: Any) -> ResolvedPlan:
         """Strictly re-parse the plan and check every label against bank records."""

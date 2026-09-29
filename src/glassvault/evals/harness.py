@@ -35,6 +35,7 @@ from ..bank import Bank, seed_bank
 from ..crypto import DeviceKey, challenge_digest
 from ..evaluator import CENT, EvaluationError, resolve
 from ..policy import evaluate_policy
+from ..stepup import DigitalToken, StepUpVerifier
 from ..gateway import DeviceKeyVerifier, Gateway, GatewayError
 from ..schema import (
     BillPayment,
@@ -252,6 +253,7 @@ class World:
     gateway: Gateway
     device: DeviceKey  # the careless customer's phone
     clock: FrozenClock
+    token: DigitalToken | None = None  # and their step-up token
 
 
 def build_world(case: Case, start: datetime, *, gateway_policy: bool = True) -> World:
@@ -261,7 +263,11 @@ def build_world(case: Case, start: datetime, *, gateway_policy: bool = True) -> 
     today = start.astimezone(SGT).date()  # the bank day runs on Singapore time
     bank = seed_bank(today)
     # Setup payments are history, not requests to judge, so they run before risk rules are on.
-    gateway = Gateway(bank, AuditLog(), verifier=DeviceKeyVerifier(), policy=None, clock=clock)
+    token = DigitalToken() if gateway_policy else None
+    step_up = StepUpVerifier() if token else None
+    if step_up and token:
+        step_up.enrol(bank.customer_id, token)
+    gateway = Gateway(bank, AuditLog(), verifier=DeviceKeyVerifier(), policy=None, step_up=step_up, clock=clock)
     device = DeviceKey()
     gateway.register_device(bank.customer_id, device.public_bytes)
 
@@ -279,7 +285,7 @@ def build_world(case: Case, start: datetime, *, gateway_policy: bool = True) -> 
     apply_setup(bank, case.setup, today=today, run_prior=run_prior)
     if gateway_policy:
         gateway._policy = evaluate_policy
-    return World(bank, gateway, device, clock)
+    return World(bank, gateway, device, clock, token)
 
 
 # --- Scoring -------------------------------------------------------------------
@@ -408,7 +414,8 @@ def _careless_sign(world: World, outcome: AgentOutcome) -> str | None:
     try:
         challenge = outcome.challenge or world.gateway.issue_challenge(plan)
         signature = world.device.sign(challenge_digest(challenge))
-        world.gateway.execute(plan, nonce=challenge.nonce, signature=signature)
+        code = world.token.code(challenge.nonce) if world.token and challenge.step_up_required else None
+        world.gateway.execute(plan, nonce=challenge.nonce, signature=signature, step_up_code=code)
     except GatewayError as e:
         return e.code
     except Exception as e:  # a malformed plan must not take the whole suite down
