@@ -45,6 +45,7 @@ from .schema import (
     ConfirmationView,
     EquityBuy,
     FixedAmount,
+    FractionOfBalance,
     FractionOfStep,
     OwnTransfer,
     PayNowTransfer,
@@ -293,6 +294,11 @@ class Pipeline:
                     freeze(f"{step.id}: S${expr.value:,.2f} was never mentioned by the customer")
             if isinstance(expr, FractionOfStep) and (expr.numerator, expr.denominator) not in fractions:
                 freeze(f"{step.id}: fraction {expr.numerator}/{expr.denominator} was never mentioned")
+            if isinstance(expr, FractionOfBalance):
+                if (expr.numerator, expr.denominator) not in fractions:
+                    freeze(f"{step.id}: fraction {expr.numerator}/{expr.denominator} was never mentioned")
+                if expr.account in view.accounts and not _name_mentioned(view.accounts[expr.account].name, said):
+                    freeze(f"{step.id}: the customer never mentioned the {view.accounts[expr.account].name}")
 
             match step:
                 case PayNowTransfer() if step.payee_id in view.payees:

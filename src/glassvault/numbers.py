@@ -730,11 +730,17 @@ def _is_date(before: str, after: str, value: int) -> bool:
     )
 
 
+# "N of <name> shares" is a cash amount ("buy 500 of DBS shares"); "N of my/the ..." stays a count.
+_OF_DETERMINERS = frozenset("my the your our his her their these those them all each".split())
+
+
 def _counted(t: _Text, end: int) -> bool:
     """A count noun follows within a few words: "12 shares", "12 more DBS shares"."""
     for j in range(end, min(end + 4, t.n)):
         w = t.word(j)
         if not t.joined(j, hyphen=False) or w is None:
+            return False
+        if j == end and w == "of" and t.word(j + 1) not in _OF_DETERMINERS:
             return False
         if w in _COUNT_NOUNS:
             return True

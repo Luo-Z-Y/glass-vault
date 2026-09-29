@@ -546,3 +546,17 @@ def test_output_invariants_on_noisy_text():
         spans = [(m.start, m.end) for m in extract_amounts(text)]
         for f in extract_fractions(text):
             assert not any(s < f.end and f.start < e for s, e in spans), text
+
+
+@pytest.mark.parametrize("text, value", [
+    ("Buy 13000 of DBS shares.", "13000.00"),
+    ("Buy 2000 of OCBC shares from the joint account.", "2000.00"),
+    ("buy 500 of Singtel", "500.00"),
+])
+def test_n_of_a_named_stock_is_cash(text, value):
+    assert [str(m.value) for m in extract_amounts(text)] == [value]
+
+
+@pytest.mark.parametrize("text", ["sell 100 of my DBS shares", "two of my accounts", "send 3 of the bills"])
+def test_n_of_a_determiner_stays_a_count(text):
+    assert extract_amounts(text) == []

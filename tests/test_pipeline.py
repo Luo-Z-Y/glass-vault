@@ -124,3 +124,16 @@ def test_llm_sees_relationship_aliases(bank):
 
     mum = next(p for p in build_context(bank.view()).prompt_data["payees"] if p["id"] == "P_MUM")
     assert "ma" in mum["also_called"] and "mother" in mum["also_called"]
+
+
+def test_a_quarter_of_my_savings(pipeline, bank):
+    o = talk(pipeline, "Move a quarter of my savings over to the joint account can?")
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    (step,) = o.plan.steps
+    assert (step.from_account, step.to, step.amount) == ("SAV", "JNT", Decimal("3100.00"))
+
+
+def test_buy_n_of_a_stock_is_a_cash_amount(pipeline):
+    o = talk(pipeline, "Buy 2000 of OCBC shares from the joint account")
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    assert o.plan.steps[0].equity.quantity == 118  # floor(2000 / 16.85)

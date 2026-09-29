@@ -84,6 +84,7 @@ A plan is a list of 1 to 6 steps, one per action, in the order the customer said
 - amount: an object with exactly one of:
     {"value": "1000"}: the S$ amount the customer said, as plain digits with at most 2 decimals. Turn words into digits and nothing more: "a grand" -> "1000", "5k" -> "5000", "fifty bucks" -> "50", "$1,250.50" -> "1250.50".
     {"fraction_of_step": {"step": "t1", "numerator": 1, "denominator": 2}}: an amount the customer described relative to an earlier step: "half of it" -> 1/2, "a quarter of that" -> 1/4, "30% of it" -> 30/100.
+    {"fraction_of_balance": {"account": "SAV", "numerator": 1, "denominator": 4}}: an amount the customer described relative to an account's balance: "a quarter of my savings" -> SAV 1/4, "half of what's in joint" -> JNT 1/2.
     {"full_amount_due": true}: a bill payment where the customer gave no amount ("pay my SP bill"). The bank fills in the amount due.
   Never calculate anything: no adding, subtracting, multiplying, dividing, rounding or currency conversion. The bank's software does all the maths.
 - Finished requests: once the assistant has said an earlier request was approved and executed, that request is done. Never include it again; cover only what the customer asked for after it.
@@ -140,7 +141,7 @@ def _plan_parameters() -> dict[str, Any]:
             "symbol": {"type": "string", "description": "equity_buy only: listed share symbol"},
             "amount": {
                 "type": "object",
-                "description": "exactly one of value, fraction_of_step, full_amount_due",
+                "description": "exactly one of value, fraction_of_step, fraction_of_balance, full_amount_due",
                 "properties": {
                     "value": {"type": "string", "description": 'S$ amount in digits, e.g. "1000" or "142.35"'},
                     "fraction_of_step": {
@@ -152,6 +153,16 @@ def _plan_parameters() -> dict[str, Any]:
                             "denominator": {"type": "integer"},
                         },
                         "required": ["step", "numerator", "denominator"],
+                    },
+                    "fraction_of_balance": {
+                        "type": "object",
+                        "description": 'e.g. "a quarter of my savings" -> {"account": "SAV", "numerator": 1, "denominator": 4}',
+                        "properties": {
+                            "account": {"type": "string"},
+                            "numerator": {"type": "integer"},
+                            "denominator": {"type": "integer"},
+                        },
+                        "required": ["account", "numerator", "denominator"],
                     },
                     "full_amount_due": {
                         "type": "boolean",
@@ -350,7 +361,7 @@ def _decimal(raw: Any) -> Decimal | None:
 _STEP = TypeAdapter(Step)
 _STEP_ID = re.compile(r"^(?:t|step)?[\s_-]*0*([1-9][0-9]?)$", re.I)
 _MONEY = re.compile(r"^(?:S\$|SGD|\$)?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?$", re.I)
-_UNION_TAGS = {"fixed", "fraction_of_step", "kind", *STEP_TYPES}
+_UNION_TAGS = {"fixed", "fraction_of_step", "fraction_of_balance", "kind", *STEP_TYPES}
 _SCHEMA_TO_TOOL = {"notional": "amount", "funding_account": "from_account"}
 
 
@@ -458,14 +469,31 @@ def _amount(
     if isinstance(raw, (str, int, float, Decimal)) and not isinstance(raw, bool):
         raw = {"value": raw}  # a bare number is a common shortcut
     if not isinstance(raw, Mapping):
-        errors.append(f"{what} is required: an object with value, fraction_of_step or full_amount_due")
+        errors.append(f"{what} is required: an object with value, fraction_of_step, fraction_of_balance or full_amount_due")
         return None
     full_due = raw.get("full_amount_due") is True or str(raw.get("full_amount_due")).lower() == "true"
-    given = [k for k in ("value", "fraction_of_step") if raw.get(k) not in (None, "", {})]
+    given = [k for k in ("value", "fraction_of_step", "fraction_of_balance") if raw.get(k) not in (None, "", {})]
     given += ["full_amount_due"] if full_due else []
     if len(given) != 1:
-        errors.append(f"{what} must have exactly one of value, fraction_of_step or full_amount_due")
+        errors.append(f"{what} must have exactly one of value, fraction_of_step, fraction_of_balance or full_amount_due")
         return None
+
+    if given == ["fraction_of_balance"]:
+        share = raw["fraction_of_balance"]
+        if not isinstance(share, Mapping):
+            errors.append(f"{what}.fraction_of_balance must be an object with account, numerator and denominator")
+            return None
+        account = _known(catalog, "accounts", str(share.get("account", "")).strip(), f"{what}.fraction_of_balance.account", errors)
+        numerator, denominator = _count(share.get("numerator")), _count(share.get("denominator"))
+        if numerator is None or denominator is None:
+            errors.append(f"{what}.fraction_of_balance needs whole-number numerator and denominator of at least 1")
+            return None
+        if numerator > denominator:
+            errors.append(f"{what}: a fraction of a balance cannot exceed the whole balance; ask the customer instead")
+            return None
+        if not account:
+            return None
+        return {"kind": "fraction_of_balance", "account": account, "numerator": numerator, "denominator": denominator}
 
     if given == ["value"]:
         value = _money(raw["value"], what, errors)

@@ -19,6 +19,7 @@ from .schema import (
     EquityBuy,
     EquityFill,
     FixedAmount,
+    FractionOfBalance,
     OwnTransfer,
     PayNowTransfer,
     Plan,
@@ -87,7 +88,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 account(step.to_account, step.id)
                 if step.from_account == step.to_account:
                     raise EvaluationError("SAME_ACCOUNT", "cannot transfer to the same account", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
                 balances[step.to_account] += cash
                 to, equity = step.to_account, None
@@ -97,7 +98,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 payee = view.payees.get(step.payee_id)
                 if payee is None:
                     raise EvaluationError("UNKNOWN_PAYEE", f"no saved payee {step.payee_id!r}", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
                 to, equity = payee.id, None
 
@@ -106,7 +107,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 biller = view.billers.get(step.biller_id)
                 if biller is None:
                     raise EvaluationError("UNKNOWN_BILLER", f"no saved biller {step.biller_id!r}", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
                 to, equity = biller.id, None
 
@@ -115,7 +116,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 quote = view.market.quote(step.symbol, now)
                 if quote is None:
                     raise EvaluationError("UNKNOWN_SYMBOL", f"no listing {step.symbol!r}", step.id)
-                notional = _amount(step.notional, cash_by_step, step.id)
+                notional = _amount(step.notional, cash_by_step, balances, step.id)
                 quantity = int(notional // quote.price)
                 if quantity < 1:
                     raise EvaluationError(
@@ -158,9 +159,18 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
     )
 
 
-def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], step_id: str) -> Decimal:
+def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], balances: dict[str, Decimal],
+            step_id: str) -> Decimal:
     if isinstance(expr, FixedAmount):
         return expr.value.quantize(CENT, rounding=ROUND_DOWN)
+    if isinstance(expr, FractionOfBalance):
+        if expr.account not in balances:
+            raise EvaluationError("UNKNOWN_ACCOUNT", f"no account {expr.account!r}", step_id)
+        # Round down so a fraction never exceeds what the customer said.
+        value = (balances[expr.account] * expr.numerator / expr.denominator).quantize(CENT, rounding=ROUND_DOWN)
+        if value <= 0:
+            raise EvaluationError("ZERO_AMOUNT", "amount rounds to zero", step_id)
+        return value
     if expr.step not in cash_by_step:
         raise EvaluationError(
             "FORWARD_REFERENCE", f"{expr.step} must be an earlier step", step_id

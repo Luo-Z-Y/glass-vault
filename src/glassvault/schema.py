@@ -47,7 +47,25 @@ class FractionOfStep(_Frozen):
         return self
 
 
-AmountExpr = Annotated[Union[FixedAmount, FractionOfStep], Field(discriminator="kind")]
+class FractionOfBalance(_Frozen):
+    """An amount defined relative to an account balance, e.g. "a quarter of my savings".
+
+    The evaluator uses the balance as it stands when this step runs (after earlier steps).
+    """
+
+    kind: Literal["fraction_of_balance"] = "fraction_of_balance"
+    account: str
+    numerator: int = Field(ge=1)
+    denominator: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _at_most_whole(self) -> FractionOfBalance:
+        if self.numerator > self.denominator:
+            raise ValueError("a fraction of a balance cannot exceed the whole balance")
+        return self
+
+
+AmountExpr = Annotated[Union[FixedAmount, FractionOfStep, FractionOfBalance], Field(discriminator="kind")]
 
 
 # --- Draft steps (LLM output) ------------------------------------------------

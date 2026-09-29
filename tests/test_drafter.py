@@ -163,7 +163,7 @@ def test_tool_schema_is_flat():
     walk(list(DRAFTER_TOOLS.tools))
     step = DRAFTER_TOOLS.tools[0]["function"]["parameters"]["properties"]["steps"]["items"]
     assert step["properties"]["type"]["enum"] == ["own_transfer", "paynow", "bill_payment", "equity_buy"]
-    assert {"value", "fraction_of_step", "full_amount_due"} == step["properties"]["amount"]["properties"].keys()
+    assert {"value", "fraction_of_step", "fraction_of_balance", "full_amount_due"} == step["properties"]["amount"]["properties"].keys()
 
 
 def test_draft_run_exposes_raw_responses(context):

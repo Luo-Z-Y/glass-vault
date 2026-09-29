@@ -82,7 +82,7 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
         if not clause:
             continue
         step_id = f"t{len(steps) + 1}"
-        amount, evidence = _amount(clause, steps)
+        amount, evidence = _amount(clause, steps, view)
         if SHARES.search(clause):
             symbol, said = _symbol(clause, view)
             if symbol is None:
@@ -108,7 +108,8 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
             to_account, said = target
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to move to your {view.accounts[to_account].name}?")
-            source = next(a for a in view.accounts if a != to_account)
+            source = (amount or {}).get("fraction_of_balance", {}).get("account") or next(
+                a for a in view.accounts if a != to_account)
             steps.append({"id": step_id, "type": "own_transfer", "from_account": source, "to_account": to_account,
                           "amount": amount, "evidence": {**evidence, "to_account": said}})
         elif re.search(rf"\b{VERB}\b", clause, re.I):
@@ -134,8 +135,17 @@ def _ask(reason: str, question: str, options: list[dict[str, str]] | None = None
     return {"reason": reason, "question": question, **({"options": options} if options else {})}
 
 
-def _amount(clause: str, steps: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, str]]:
+def _amount(clause: str, steps: list[dict[str, Any]], view: BankView | None = None
+            ) -> tuple[dict[str, Any] | None, dict[str, str]]:
     fractions = extract_fractions(clause)
+    if fractions and view is not None:
+        f = fractions[0]
+        for account in view.accounts.values():
+            word = account.name.split()[0]
+            if m := re.search(rf"\bof\s+(?:my\s+|the\s+)?({re.escape(word)})\b", clause, re.I):
+                return ({"fraction_of_balance": {"account": account.id, "numerator": f.numerator,
+                                                 "denominator": f.denominator}},
+                        {"amount": f.text, "from_account": m.group(1)})
     if fractions and steps:
         f = fractions[0]
         return ({"fraction_of_step": {"step": steps[-1]["id"], "numerator": f.numerator, "denominator": f.denominator}},
@@ -168,7 +178,7 @@ def _biller(clause: str, view: BankView) -> tuple[str | None, str]:
 def _own_account(clause: str, view: BankView) -> tuple[str, str] | None:
     for account in view.accounts.values():
         word = account.name.split()[0]
-        if m := re.search(rf"\b(?:to|into)\s+(?:my\s+)?({re.escape(word)})\b", clause, re.I):
+        if m := re.search(rf"\b(?:to|into)\s+(?:my\s+|the\s+|our\s+)?({re.escape(word)})\b", clause, re.I):
             return account.id, m.group(1)
     return None
 
