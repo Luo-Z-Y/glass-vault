@@ -18,7 +18,7 @@ CENT = Decimal("0.01")
 
 
 def share_cost(price: Decimal, quantity: int) -> Decimal:
-    """Cash for a share buy. Shared by the evaluator and the gateway so they can never disagree.
+    """Cash for a share buy. Shared by the evaluator, the renderer and the gateway so they can never disagree.
 
     Rounds up to the cent (never undercharges); since quantity = floor(notional / price)
     and notional is whole cents, the cost still never exceeds the notional.

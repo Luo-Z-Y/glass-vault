@@ -93,7 +93,7 @@ shows.
    `step_up` and `allow` go on.
 10. **Confirmation.** `renderer.render` builds the screen lines and the spoken
     script from templates, looking every name up by id. `script_hash` is the
-    SHA-256 of the script.
+    SHA-256 of the script. A plan it cannot show truthfully is `frozen`.
 11. **Challenge.** `GatewayPort.issue_challenge`. The gateway checks the plan
     again (next section); if it refuses, the outcome is `frozen` (`refused` for
     insufficient funds).

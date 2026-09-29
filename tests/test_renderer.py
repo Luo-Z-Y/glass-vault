@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from glassvault.bank import Bank, Payee
+from glassvault.bank import Bank, Market, Payee
 from glassvault.evaluator import resolve
 from glassvault.gateway import Execution
 from glassvault.policy import RULE_OUTCOMES, decision_id, evaluate_policy
@@ -261,6 +261,15 @@ def test_sub_cent_share_price_is_shown_exactly(bank):
     assert "at zero point nine-zero-five dollars per share" in said(view)
 
 
+def test_sub_cent_share_price_shows_the_total_the_bank_charges(penny_bank):
+    # 11 x S$0.905 = S$9.955, which the evaluator (like the gateway) rounds up to S$9.96.
+    view, _ = confirm(penny_bank, resolved(penny_bank, buy("t1", "X01", "10")))
+    assert view.lines == ("Buy 11 Penny Co (X01) shares at S$0.905 = S$9.96 from Savings Account",)
+    assert ("Transaction one: buy eleven shares of Penny Co, stock code X zero one, "
+            "at zero point nine-zero-five dollars per share, from your Savings Account, "
+            "for a total of nine dollars and ninety-six cents.") in said(view)
+
+
 @pytest.mark.parametrize(
     "steps",
     [
@@ -390,6 +399,15 @@ def test_share_maths_must_add_up(bank):
     assert e.value.code == "INCONSISTENT_STEP"
 
 
+@pytest.mark.parametrize("amount", ["9.95", "9.97"])  # 11 x S$0.905 costs S$9.96, not a cent either side
+def test_sub_cent_share_total_must_be_what_the_bank_charges(penny_bank, amount):
+    plan = with_step(resolved(penny_bank, buy("t1", "X01", "10")), amount=Decimal(amount))
+    decision = evaluate_policy(plan, penny_bank.view(), now=NOW, history=())
+    with pytest.raises(RenderError) as e:
+        render(plan, decision, penny_bank.view())
+    assert e.value.code == "INCONSISTENT_STEP"
+
+
 # --- determinism -------------------------------------------------------------------
 
 
@@ -415,4 +433,11 @@ def test_every_policy_code_has_a_plain_spoken_template(bank, code):
 @pytest.fixture
 def rich_bank(bank: Bank) -> Bank:
     bank.accounts["SAV"].balance = Decimal("200000.00")
+    return bank
+
+
+@pytest.fixture
+def penny_bank(bank: Bank) -> Bank:
+    # SGX ticks can go below a cent, so a whole number of shares can cost a fraction of a cent.
+    bank.market = Market({"X01": ("Penny Co", Decimal("0.905"))})
     return bank

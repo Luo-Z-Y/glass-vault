@@ -150,8 +150,9 @@ def read_digits(value: Decimal) -> str      # digit-by-digit read-back of large 
 `Execution` is `gateway.Execution(at, step)`. Outcome precedence:
 deny > hold > step_up > allow. Own-account transfers are exempt from
 third-party limits. `render` raises `RenderError` rather than render a plan
-whose policy decision was made for a different plan, or a counterparty the bank
-does not know.
+whose policy decision was made for a different plan, a counterparty the bank
+does not know, or a share buy whose amount is not `share_cost(price, quantity)`;
+the pipeline turns that into `frozen`.
 
 ## pipeline.py: a dialogue in, one outcome out
 

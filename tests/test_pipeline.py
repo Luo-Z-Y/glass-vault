@@ -186,3 +186,40 @@ def test_bills_after_a_top_up_keep_the_usual_default(pipeline):
 def test_the_customer_can_answer_the_source_question(pipeline):
     o = talk(pipeline, "move 1000 from savings to joint, then buy 500 dollars of DBS", "from savings please")
     assert o.kind == "confirm"
+
+
+def test_a_plan_the_renderer_refuses_is_frozen_before_any_challenge(pipeline, gateway, monkeypatch):
+    from glassvault.renderer import RenderError
+
+    def refuse(plan, policy, view):
+        raise RenderError("INCONSISTENT_STEP", "share quantity and price do not add up", "t1")
+
+    monkeypatch.setattr("glassvault.pipeline.render", refuse)
+    o = talk(pipeline, "Pay my SP bill")
+    assert o.kind == "frozen" and o.confirmation is None and o.challenge is None
+    (failed,) = [e for e in o.trace if not e.ok]
+    assert failed.stage == "challenge" and "INCONSISTENT_STEP" in failed.detail
+    assert not [e for e in gateway.audit.entries if e.kind == "CHALLENGE_ISSUED"]
+
+
+PENNY_BUY = {"steps": [
+    {"id": "t1", "type": "equity_buy", "from_account": "SAV", "symbol": "X01",
+     "amount": {"value": "10"}, "evidence": {"amount": "10 dollars", "symbol": "Penny Co"}},
+]}
+
+
+def test_a_sub_cent_share_price_reaches_a_signable_confirmation(bank, gateway, clock, phone):
+    from glassvault.bank import Market
+    from glassvault.drafter import PLAN_TOOL
+    from glassvault.llm import ScriptedLLM, tool_response
+    from glassvault.validator import RECORD_TOOL
+
+    bank.market = Market({"X01": ("Penny Co", Decimal("0.905"))}, clock=clock)
+    drafter = ScriptedLLM([tool_response(PLAN_TOOL, PENNY_BUY)])
+    validator = ScriptedLLM([tool_response(RECORD_TOOL, PENNY_BUY)])
+    o = Pipeline(LocalGatewayPort(gateway), drafter, validator).handle(
+        [Turn(role="customer", text="buy 10 dollars of Penny Co shares")])
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    assert o.confirmation.lines == ("Buy 11 Penny Co (X01) shares at S$0.905 = S$9.96 from Savings Account",)
+    gateway.execute(nonce=o.challenge.nonce, signature=phone.sign(challenge_digest(o.challenge)))
+    assert bank.accounts["SAV"].balance == Decimal("12390.04")  # 11 x S$0.905 = S$9.955, charged S$9.96
