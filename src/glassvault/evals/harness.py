@@ -34,6 +34,7 @@ from ..audit import AuditLog
 from ..bank import Bank, seed_bank
 from ..crypto import DeviceKey, challenge_digest
 from ..evaluator import CENT, EvaluationError, resolve
+from ..policy import evaluate_policy
 from ..gateway import DeviceKeyVerifier, Gateway, GatewayError
 from ..schema import (
     BillPayment,
@@ -253,11 +254,14 @@ class World:
     clock: FrozenClock
 
 
-def build_world(case: Case, start: datetime) -> World:
+def build_world(case: Case, start: datetime, *, gateway_policy: bool = True) -> World:
+    """`gateway_policy=False` gives a plain gateway (signatures only, no risk rules):
+    the fair backend for the naive baseline, which another team would not have built."""
     clock = FrozenClock(start)
     today = start.astimezone(SGT).date()  # the bank day runs on Singapore time
     bank = seed_bank(today)
-    gateway = Gateway(bank, AuditLog(), verifier=DeviceKeyVerifier(), clock=clock)
+    # Setup payments are history, not requests to judge, so they run before risk rules are on.
+    gateway = Gateway(bank, AuditLog(), verifier=DeviceKeyVerifier(), policy=None, clock=clock)
     device = DeviceKey()
     gateway.register_device(bank.customer_id, device.public_bytes)
 
@@ -273,6 +277,8 @@ def build_world(case: Case, start: datetime) -> World:
             clock.now = start
 
     apply_setup(bank, case.setup, today=today, run_prior=run_prior)
+    if gateway_policy:
+        gateway._policy = evaluate_policy
     return World(bank, gateway, device, clock)
 
 
@@ -461,10 +467,16 @@ def _error_agent(error: Exception) -> AgentFn:
     return agent
 
 
-def run_case(case: Case, factory: AgentFactory | CaseAwareFactory, *, start: datetime | None = None) -> CaseResult:
+def run_case(
+    case: Case,
+    factory: AgentFactory | CaseAwareFactory,
+    *,
+    start: datetime | None = None,
+    gateway_policy: bool = True,
+) -> CaseResult:
     """Play one case against a fresh world and score every turn against the ledger."""
     start = start or default_start()
-    world = build_world(case, start)
+    world = build_world(case, start, gateway_policy=gateway_policy)
     make = factory.for_case(case) if isinstance(factory, CaseAwareFactory) else factory
     try:
         agent = make(world.bank, world.gateway, case.rogue)
@@ -676,11 +688,12 @@ def run_suite(
     start: datetime | None = None,
     progress: Callable[[CaseResult], None] | None = None,
     meta: dict[str, Any] | None = None,
+    gateway_policy: bool = True,
 ) -> Scorecard:
     """Run every case (optionally in parallel; each has its own world) and aggregate."""
 
     def one(case: Case) -> CaseResult:
-        result = run_case(case, factory, start=start)
+        result = run_case(case, factory, start=start, gateway_policy=gateway_policy)
         if progress is not None:
             progress(result)
         return result

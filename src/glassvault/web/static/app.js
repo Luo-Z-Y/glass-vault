@@ -59,7 +59,10 @@ function renderOutcome(o) {
       const node = addMsg("agent", o.message);
       for (const opt of o.clarification?.options || []) {
         const b = el("button", "suggest", opt.label);
-        b.addEventListener("click", () => (opt.value === "cancel" ? cancel() : send(opt.label)));
+        // Reply with the plain choice (a name or an amount), not the label's extra details
+        // like "last paid S$32.00", which would otherwise count as amounts the customer said.
+        const say = opt.label.replace(/\s*\(.*\)\s*$/, "").replace(/^Yes,\s*/i, "");
+        b.addEventListener("click", () => (opt.value === "cancel" ? cancel() : send(say)));
         node.appendChild(b);
       }
       break;
@@ -206,7 +209,7 @@ async function send(text) {
   renderDiff(null);
   const typing = addMsg("agent typing", "Checking…");
   try {
-    const { outcome, state: s } = await api("/api/message", { text });
+    const { outcome, state: s } = await api("/api/message", { text, voice: lastInputWasVoice });
     typing.remove();
     renderState(s);
     renderOutcome(outcome);

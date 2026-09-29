@@ -53,6 +53,13 @@ class DemoVerifier:
     def has_passkey(self, customer_id: str) -> bool:
         return bool(self.webauthn.passkeys(customer_id))
 
+    # Enrolment of raw device keys through the gateway, which makes it write-once.
+    def has(self, customer_id: str) -> bool:
+        return self.has_passkey(customer_id) or self.simulated.has(customer_id)
+
+    def register(self, customer_id: str, public_key: bytes) -> None:
+        self.simulated.register(customer_id, public_key)
+
     def verify(self, customer_id: str, message: bytes, proof: Any) -> bool:
         if isinstance(proof, dict | str):
             return self.webauthn.verify(customer_id, message, proof)
@@ -105,11 +112,10 @@ def new_demo() -> Demo:
     bank = seed_bank(clock().date())
     audit = AuditLog()
     webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock)
-    simulated = DeviceKeyVerifier()
-    phone = DeviceKey()
-    simulated.register(bank.customer_id, phone.public_bytes)
-    verifier = DemoVerifier(webauthn, simulated)
+    verifier = DemoVerifier(webauthn, DeviceKeyVerifier())
     gateway = Gateway(bank, audit, verifier=verifier, clock=clock)
+    phone = DeviceKey()  # the simulated phone, used until a real passkey is enrolled
+    gateway.register_device(bank.customer_id, phone.public_bytes)
     drafter, validator, mode = _llms(bank)
     return Demo(bank, audit, gateway, verifier, phone, drafter, validator, mode)
 
@@ -197,6 +203,7 @@ def set_rogue(req: RogueRequest) -> dict[str, Any]:
 
 class MessageRequest(BaseModel):
     text: str
+    voice: bool = False
 
 
 @app.post("/api/message")
@@ -204,7 +211,7 @@ def message(req: MessageRequest) -> dict[str, Any]:
     text = req.text.strip()[:500]
     if not text:
         raise HTTPException(400, "empty message")
-    demo.dialogue.append(Turn(role="customer", text=text))
+    demo.dialogue.append(Turn(role="customer", text=text, via="voice" if req.voice else "text"))
     outcome = demo.pipeline.handle(demo.dialogue)
     if outcome.kind == "clarify":
         demo.dialogue.append(Turn(role="agent", text=outcome.message))
@@ -231,7 +238,7 @@ class ApproveRequest(BaseModel):
 def approve(req: ApproveRequest):
     challenge = demo.challenges.get(req.nonce)
     if req.assertion is not None:
-        proof: Any = req.assertion
+        proof: Any = _webauthn_fields(req.assertion)
     elif req.simulated and challenge is not None and not demo.verifier.has_passkey(demo.bank.customer_id):
         proof = demo.simulated_phone.sign(challenge_digest(challenge))  # labelled "simulated" in the UI
     else:
@@ -242,6 +249,17 @@ def approve(req: ApproveRequest):
         return error(e)
     demo.last_approval = (req.nonce, proof)
     return {"receipts": [r.__dict__ for r in receipts], "state": state_json()}
+
+
+def _webauthn_fields(assertion: dict[str, Any]) -> dict[str, Any]:
+    """Only the fields a WebAuthn assertion has; nothing else reaches the gateway or its audit log."""
+    response = assertion.get("response") or {}
+    return {
+        **{k: assertion[k] for k in ("id", "rawId", "type", "authenticatorAttachment") if k in assertion},
+        "clientExtensionResults": {},
+        "response": {k: response[k] for k in ("clientDataJSON", "authenticatorData", "signature", "userHandle")
+                     if k in response},
+    }
 
 
 # --- Passkey enrolment ------------------------------------------------------------------
@@ -296,7 +314,7 @@ def _attack(kind: str) -> tuple[Decimal, Any]:
             plan = _theft_plan()
             return plan.steps[0].amount, gw.execute(plan)
         case "forge":
-            plan = _theft_plan()
+            plan = _theft_plan(amount="900")  # under the new-payee limit, so only the signature stands in the way
             challenge = gw.issue_challenge(plan)
             return plan.steps[0].amount, gw.execute(plan, nonce=challenge.nonce,
                                                     signature=DeviceKey().sign(challenge_digest(challenge)))
@@ -308,9 +326,7 @@ def _attack(kind: str) -> tuple[Decimal, Any]:
             spoof = honest.model_copy(update={"steps": (honest.steps[0].model_copy(update={"to": "P_JLIM"}),)})
             return Decimal("500"), gw.issue_challenge(spoof)
         case "rekey":
-            demo.audit.append("REJECTED", {"code": "DEVICE_ALREADY_REGISTERED", "customer_id": demo.bank.customer_id},
-                              at=gw.now())
-            raise GatewayError("DEVICE_ALREADY_REGISTERED", "a device is already enrolled for this customer")
+            return Decimal("0"), gw.register_device(demo.bank.customer_id, DeviceKey().public_bytes)
         case "sub_cent":
             honest = _theft_plan("P_MUM", "500")
             bad = honest.model_copy(update={"steps": (honest.steps[0].model_copy(update={"amount": Decimal("500.004")}),)})

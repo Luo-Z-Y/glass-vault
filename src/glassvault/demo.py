@@ -86,10 +86,14 @@ def main() -> None:
     attempt("3. Replay an approval that was already used", lambda: gateway.execute(
         plan, nonce=challenge.nonce, signature=signature))
 
-    # 4. A perfectly formed plan still needs the customer's key.
+    # 4. A perfectly formed plan, within every risk limit, still needs the customer's key.
+    small = resolve(Plan(steps=[PayNowTransfer(id="t1", from_account="SAV", payee_id="P_JLIM",
+                                               amount=FixedAmount(value=Decimal("900")))]),
+                    bank.view(), now=now)
+
     def forge() -> None:
-        c4 = gateway.issue_challenge(theft)
-        gateway.execute(theft, nonce=c4.nonce, signature=attacker.sign(challenge_digest(c4)))
+        c4 = gateway.issue_challenge(small)
+        gateway.execute(small, nonce=c4.nonce, signature=attacker.sign(challenge_digest(c4)))
     attempt("4. Sign a valid-looking plan with the agent's own key", forge)
 
     # 5. Show the customer "Mum" on screen while paying someone else.

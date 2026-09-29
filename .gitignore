@@ -9,3 +9,4 @@ __pycache__/
 docs/reference/
 # Private planning notes (competitor + judging analysis)
 docs/brainstorm.md
+!.env.example

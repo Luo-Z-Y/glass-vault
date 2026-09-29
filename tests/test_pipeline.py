@@ -69,3 +69,35 @@ def test_rogue_drafter_never_gets_a_challenge(bank, gateway, attack):
     assert o.kind in {"frozen", "clarify"}, o.trace
     assert o.challenge is None
     assert not [e for e in gateway.audit.entries if e.kind == "CHALLENGE_ISSUED"]
+
+
+def test_rogue_amount_freezes_even_on_voice(bank, gateway):
+    # The drafter reads the same transcript we do, so a never-said amount is never "misheard".
+    honest = OfflineLLM(bank.view)
+    rogue = RogueLLM(honest, "inflate_amount", bank.view())
+    pipe = Pipeline(LocalGatewayPort(gateway), rogue, honest)
+    for via in ("text", "voice"):
+        assert pipe.handle([Turn(role="customer", text="Send mum 300 for groceries", via=via)]).kind == "frozen"
+
+
+def test_voice_asks_fifteen_or_fifty_when_history_suggests_it(bank, gateway):
+    from dataclasses import replace
+    from glassvault.bank import PastPayment
+
+    tan = bank.payees["P_JTAN"]
+    bank.payees["P_JTAN"] = replace(tan, history=(PastPayment(tan.history[0].on, Decimal("15.00")),))
+    pipe = Pipeline(LocalGatewayPort(gateway), OfflineLLM(bank.view), OfflineLLM(bank.view))
+    spoken = pipe.handle([Turn(role="customer", text="send John Tan fifty", via="voice")])
+    assert spoken.kind == "clarify"
+    assert [o.value for o in spoken.clarification.options] == ["50.00", "15.00"]
+    # Typed text cannot be misheard, so no question.
+    assert pipe.handle([Turn(role="customer", text="send John Tan fifty")]).kind == "confirm"
+
+
+def test_a_correction_supersedes_the_earlier_amount(pipeline):
+    first = talk(pipeline, "Send mum 6000")
+    assert first.kind == "clarify"  # far above the usual S$500
+    # The offline drafter keeps drafting 6000 from the first turn: provenance must not accept it now.
+    corrected = talk(pipeline, "Send mum 6000", "Sorry, I meant six hundred")
+    assert corrected.kind == "frozen"
+    assert any("never mentioned" in e.detail for e in corrected.trace if not e.ok)

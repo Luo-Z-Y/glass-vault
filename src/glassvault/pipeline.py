@@ -34,7 +34,7 @@ from .drafter import DraftError, draft
 from .evaluator import EvaluationError, resolve
 from .gateway import Execution, Gateway, GatewayError
 from .llm import LLM, LLMResponse
-from .numbers import asr_confusables, extract_amounts, extract_fractions
+from .numbers import confusable_reasons, extract_amounts, extract_fractions
 from .policy import evaluate_policy
 from .renderer import render
 from .schema import (
@@ -193,13 +193,14 @@ class Pipeline:
             trace.append(TraceEvent("draft", True, f"{len(drafted.steps)} step(s) drafted"))
 
             self._check_provenance(drafted, dialogue, view, trace)
-            plan = self._resolve(drafted, view, now, trace, stage="resolve")
-
             try:
                 check = check_future.result()
             except DraftError as e:
                 trace.append(TraceEvent("validator", False, f"validator failed: {e}"))
-                raise _Stop("frozen", MSG_FROZEN, plan=plan) from e
+                raise _Stop("frozen", MSG_FROZEN) from e
+
+        # Resolve only now, so a share quote's 60-second clock starts after the LLM calls.
+        plan = self._resolve(drafted, view, now, trace, stage="resolve")
 
         if isinstance(check, Clarification):
             trace.append(TraceEvent("validator", False, f"validator would ask first: {check.reason}"))
@@ -215,7 +216,7 @@ class Pipeline:
             raise _Stop("frozen", MSG_FROZEN, plan=plan, diff=diff)
         trace.append(TraceEvent("validator", True, "independent re-derivation matches the draft"))
 
-        decision = evaluate_policy(plan, view, now=now, history=self._gateway.history(now - timedelta(days=1)))
+        decision = evaluate_policy(plan, view, now=now, history=self._gateway.history(now - timedelta(days=7)))
         reasons = "; ".join(r.message for r in decision.reasons)
         trace.append(TraceEvent("policy", decision.outcome in ("allow", "step_up"), f"{decision.outcome}: {reasons or 'no rules triggered'}"))
         if decision.outcome == "deny":
@@ -260,7 +261,9 @@ class Pipeline:
         """Every amount, payee and destination must trace back to the customer's own words."""
         said = _customer_text(dialogue)
         asked = _agent_text(dialogue)
-        amounts = {m.value for m in extract_amounts(said)}
+        amounts = _live_amounts(dialogue)
+        spoken_amounts = {m.value for t in dialogue if t.role == "customer" and t.via == "voice"
+                          for m in extract_amounts(t.text)}
         fractions = {(f.numerator, f.denominator) for f in extract_fractions(said)}
 
         def freeze(detail: str) -> None:
@@ -284,15 +287,8 @@ class Pipeline:
                     and expr.value == view.billers[step.biller_id].amount_due
                 )
                 if not bill_due:
-                    heard = sorted(a for a in amounts if expr.value in asr_confusables(a) or a in asr_confusables(expr.value))
-                    if heard and not _mentions_amount(asked, expr.value):
-                        ask(f"{step.id}: S${expr.value:,.2f} may be a mishearing of S${heard[0]:,.2f}",
-                            Clarification(
-                                reason="ambiguous_amount",
-                                question=f"Did you say S${heard[0]:,.2f} or S${expr.value:,.2f}?",
-                                options=(ClarifyOption(label=f"S${heard[0]:,.2f}", value=str(heard[0])),
-                                         ClarifyOption(label=f"S${expr.value:,.2f}", value=str(expr.value))),
-                            ))
+                    # The drafter reads the same transcript we do, so it cannot mishear it:
+                    # an amount the customer never said is never turned into a question.
                     freeze(f"{step.id}: S${expr.value:,.2f} was never mentioned by the customer")
             if isinstance(expr, FractionOfStep) and (expr.numerator, expr.denominator) not in fractions:
                 freeze(f"{step.id}: fraction {expr.numerator}/{expr.denominator} was never mentioned")
@@ -306,6 +302,17 @@ class Pipeline:
                         if step.payee_id in ids and not any(view.payees[i].legal_name in asked for i in ids if i in view.payees):
                             ask(f"{step.id}: '{phrase}' could mean {len(ids)} payees",
                                 _which_payee(phrase, ids, view))
+                    if isinstance(step.amount, FixedAmount) and step.amount.value in spoken_amounts:
+                        said_value = step.amount.value
+                        alt = _likelier_reading(said_value, payee)
+                        if alt is not None and not _mentions_amount(asked, said_value):
+                            ask(f"{step.id}: speech-to-text may have misheard S${alt:,.2f} as S${said_value:,.2f}",
+                                Clarification(
+                                    reason="ambiguous_amount",
+                                    question=f"Did you say S${said_value:,.2f} or S${alt:,.2f}?",
+                                    options=(ClarifyOption(label=f"S${said_value:,.2f}", value=str(said_value)),
+                                             ClarifyOption(label=f"S${alt:,.2f}", value=str(alt))),
+                                ))
                     if isinstance(step.amount, FixedAmount) and _is_outlier(step.amount.value, payee) \
                             and not _mentions_amount(asked, step.amount.value):
                         usual = max(p.amount for p in payee.history)
@@ -357,6 +364,42 @@ def _mentions_amount(text: str, value: Decimal) -> bool:
     return f"S${value:,.2f}" in text
 
 
+_NEGATION = re.compile(r"\b(no|nope|not|wrong|cancel|instead|meant)\b", re.I)
+
+
+def _live_amounts(dialogue: Sequence[Turn]) -> set[Decimal]:
+    """Amounts the customer said and did not later take back.
+
+    When the agent asks about amounts and the customer's reply names a different
+    amount or says no, the asked amounts no longer count as said
+    ("S$6,000 to Mum?" -> "sorry, I meant six hundred").
+    """
+    live: set[Decimal] = set()
+    for i, turn in enumerate(dialogue):
+        values = {m.value for m in extract_amounts(turn.text)}
+        if turn.role == "customer":
+            live |= values
+            continue
+        reply = next((t for t in dialogue[i + 1:] if t.role == "customer"), None)
+        if reply is None or not values:
+            continue
+        reply_values = {m.value for m in extract_amounts(reply.text)}
+        if (reply_values and not reply_values & values) or _NEGATION.search(reply.text):
+            live -= values
+    return live
+
+
+def _likelier_reading(value: Decimal, payee: Any) -> Decimal | None:
+    """A teen/ty mishearing of `value` that is much closer to what this payee usually gets."""
+    if not payee.history:
+        return None
+    usual = max(p.amount for p in payee.history)
+    for alt, reason in confusable_reasons(value).items():
+        if reason == "teen_ty" and abs(alt - usual) * 3 < abs(value - usual):
+            return alt
+    return None
+
+
 def _is_outlier(amount: Decimal, payee: Any) -> bool:
     return bool(payee.history) and amount > 10 * max(p.amount for p in payee.history)
 
@@ -405,6 +448,8 @@ def agent_factory(
             clarification=outcome.clarification,
             detail="; ".join(f"{e.stage}: {e.detail}" for e in outcome.trace if not e.ok) or outcome.message,
             llm_calls=outcome.llm_calls,
+            step_up=(outcome.policy.outcome == "step_up") if outcome.policy else None,
+            challenge=outcome.challenge,
         )
 
     return run

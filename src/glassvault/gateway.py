@@ -31,13 +31,17 @@ from .audit import AuditLog
 from .bank import Bank, Market, share_cost
 from .crypto import challenge_digest, plan_hash, verify_signature
 from .evaluator import destination_label
-from .schema import Challenge, ResolvedPlan, ResolvedStep
+from .policy import evaluate_policy
+from .schema import Challenge, PolicyDecision, ResolvedPlan, ResolvedStep
+
+PolicyFn = Callable[..., PolicyDecision]
 
 STATUS = {
     "MALFORMED_PLAN": 400,
     "SIGNATURE_REQUIRED": 401,
     "SIGNATURE_INVALID": 401,
     "PAYLOAD_HASH_MISMATCH": 403,
+    "POLICY_DENIED": 403,
     "UNKNOWN_CHALLENGE": 404,
     "DEVICE_ALREADY_REGISTERED": 409,
     "NONCE_CONSUMED": 409,
@@ -45,6 +49,7 @@ STATUS = {
     "STALE_PLAN": 409,
     "CHALLENGE_EXPIRED": 410,
     "INSUFFICIENT_FUNDS": 422,
+    "POLICY_HOLD": 423,
     "INTERNAL_ERROR": 500,
 }
 
@@ -82,6 +87,13 @@ class ApprovalVerifier(Protocol):
     def verify(self, customer_id: str, message: bytes, proof: Any) -> bool: ...
 
 
+class EnrollingVerifier(ApprovalVerifier, Protocol):
+    """A verifier the gateway can enrol raw device keys into (write-once)."""
+
+    def has(self, customer_id: str) -> bool: ...
+    def register(self, customer_id: str, public_key: bytes) -> None: ...
+
+
 class DeviceKeyVerifier:
     """Raw Ed25519 device keys (tests and CLI demo). WebAuthn plugs in the same way."""
 
@@ -113,12 +125,15 @@ class Gateway:
         audit: AuditLog,
         *,
         verifier: ApprovalVerifier | None = None,
+        policy: PolicyFn | None = evaluate_policy,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         challenge_ttl: timedelta = timedelta(minutes=2),
     ):
         self._bank = bank
         self._audit = audit
         self._verifier = verifier or DeviceKeyVerifier()
+        # The gateway re-runs the risk rules itself: a compromised control plane cannot skip them.
+        self._policy = policy
         self._clock = clock
         self._ttl = challenge_ttl
         self._lock = threading.RLock()
@@ -147,8 +162,8 @@ class Gateway:
 
     def register_device(self, customer_id: str, public_key: bytes) -> None:
         """Enrol a raw Ed25519 device key. Write-once: a second enrolment is refused."""
-        if not isinstance(self._verifier, DeviceKeyVerifier):
-            raise TypeError("register_device needs the DeviceKeyVerifier; enrol via your verifier")
+        if not (hasattr(self._verifier, "has") and hasattr(self._verifier, "register")):
+            raise TypeError("this verifier does not enrol raw device keys; enrol via the verifier itself")
         with self._lock:
             now = self._clock()
             if self._verifier.has(customer_id):
@@ -175,6 +190,7 @@ class Gateway:
             try:
                 checked = self._check_plan(plan)
                 self._simulate(checked, now)
+                self._check_policy(checked, now, policy_decision_id)
             except GatewayError as e:
                 self._audit.append(
                     "CHALLENGE_REFUSED", {"code": e.code, "plan_hash": _safe_plan_hash(plan)}, at=now
@@ -255,6 +271,7 @@ class Gateway:
 
         stored = pending.plan
         new_balances = self._simulate(stored, now)
+        self._check_policy(stored, now, challenge.policy_decision_id)
         receipts = [
             Receipt(f"GV{next(self._receipt_ids):08d}", s.id, f"S${s.amount:,.2f} to {s.to_display}")
             for s in stored.steps
@@ -274,6 +291,21 @@ class Gateway:
             self._bank.accounts[account_id].balance = balance
         self._executions.extend(Execution(now, s) for s in stored.steps)
         return receipts
+
+    def _check_policy(self, plan: ResolvedPlan, now: datetime, claimed_id: str | None) -> None:
+        """Deny and hold outcomes stop here, whatever the control plane said.
+
+        `claimed_id` (the control plane's decision) is only recorded in the challenge;
+        the gateway's own evaluation is what counts.
+        """
+        if self._policy is None:
+            return
+        decision = self._policy(plan, self._bank.view(), now=now, history=self.history())
+        reasons = "; ".join(r.message for r in decision.reasons)
+        if decision.outcome == "deny":
+            raise GatewayError("POLICY_DENIED", reasons)
+        if decision.outcome == "hold":
+            raise GatewayError("POLICY_HOLD", reasons)
 
     def _check_plan(self, plan: Any) -> ResolvedPlan:
         """Strictly re-parse the plan and check every label against bank records."""

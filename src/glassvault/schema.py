@@ -168,6 +168,7 @@ class Challenge(_Frozen):
 class Turn(_Frozen):
     role: Literal["customer", "agent"]
     text: str
+    via: Literal["text", "voice"] = "text"  # voice turns may contain speech-to-text slips
 
 
 class ClarifyOption(_Frozen):

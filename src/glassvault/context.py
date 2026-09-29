@@ -750,6 +750,9 @@ _COMMON_WORD_NAMES = frozenset({
     "dawn", "sue", "pat", "june", "april", "summer", "chase", "cash",
 })
 _POSSESSIVES = frozenset({"my", "our", "我", "我的"})
+# Right after a payment verb a weak word is the recipient ("give ma 500",
+# "send 50 to pa"); the Singlish particle comes at the end of a clause instead.
+_PAYMENT_VERBS = frozenset({"send", "give", "pay", "transfer", "paynow", "to", "给", "转", "付"})
 _APOSTROPHES = "'’"
 
 
@@ -904,7 +907,7 @@ def _counts_as_mention(window: Sequence[_Token], previous: _Token | None) -> boo
     token = window[0]
     after_possessive = previous is not None and previous.norm in _POSSESSIVES
     if len(token.norm) == 1 or token.norm in _WEAK_WORDS:
-        return after_possessive
+        return after_possessive or (previous is not None and previous.norm in _PAYMENT_VERBS)
     if token.norm in _COMMON_WORD_NAMES:
         return token.capitalised or after_possessive
     return True

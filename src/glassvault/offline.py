@@ -22,7 +22,8 @@ from .numbers import extract_amounts, extract_fractions
 
 UNSUPPORTED = re.compile(r"\b(loan|borrow|crypto|bitcoin|btc|usd|us dollars?|overseas|remit|wire|invest in funds?)\b", re.I)
 VERB = r"(?:pay|send|move|transfer|put|give|buy|top\s+up|invest)"
-CLAUSE_SPLIT = re.compile(rf"(?:[,;.]|\bthen\b|\balso\b|\band\b(?=\s+(?:then\s+)?{VERB}\b))", re.I)
+# Commas and full stops split clauses, except inside numbers ("1,500", "1.2k").
+CLAUSE_SPLIT = re.compile(rf"(?:;|[,.](?!\d)|\bthen\b|\balso\b|\band\b(?=\s+(?:then\s+)?{VERB}\b))", re.I)
 SHARES = re.compile(r"\b(shares?|stocks?|invest)\b", re.I)
 BILL = re.compile(r"\bbill\b", re.I)
 STOPWORDS = {"send", "pay", "give", "transfer", "move", "to", "my", "the", "a", "for", "please", "dollars",

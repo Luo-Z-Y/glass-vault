@@ -134,6 +134,18 @@ def test_brief_example_executes_over_http(
     assert remote.audit()["chain_intact"]
 
 
+def test_both_readings_treat_an_executed_request_as_finished() -> None:
+    # The harness (and any multi-turn UI) keeps the dialogue after an execution;
+    # neither reading may draft the executed request a second time.
+    from glassvault.drafter import DRAFTER_SYSTEM_PROMPT
+    from glassvault.evals.harness import AgentOutcome, agent_reply
+    from glassvault.validator import VALIDATOR_SYSTEM_PROMPT
+
+    rule = "once the assistant has said an earlier request was approved and executed"
+    assert rule in DRAFTER_SYSTEM_PROMPT and rule in VALIDATOR_SYSTEM_PROMPT
+    assert "approved it and it has been executed" in agent_reply(AgentOutcome(kind="confirm"), None)
+
+
 def test_rogue_drafter_over_http_moves_nothing(remote: GatewayClient, gateway: Gateway, brief_plan: Plan) -> None:
     view = remote.view()
     drafter = RogueLLM(scripted(brief_plan, PLAN_TOOL, "drafter"), "extra_transfer", view)

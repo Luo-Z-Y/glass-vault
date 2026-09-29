@@ -86,6 +86,7 @@ A plan is a list of 1 to 6 steps, one per action, in the order the customer said
     {"fraction_of_step": {"step": "t1", "numerator": 1, "denominator": 2}}: an amount the customer described relative to an earlier step: "half of it" -> 1/2, "a quarter of that" -> 1/4, "30% of it" -> 30/100.
     {"full_amount_due": true}: a bill payment where the customer gave no amount ("pay my SP bill"). The bank fills in the amount due.
   Never calculate anything: no adding, subtracting, multiplying, dividing, rounding or currency conversion. The bank's software does all the maths.
+- Finished requests: once the assistant has said an earlier request was approved and executed, that request is done. Never include it again; cover only what the customer asked for after it.
 - evidence: for each field the customer actually said, their exact words, copied character for character from the customer's messages. Use a short phrase, not the whole sentence. Keys are field names: amount, from_account, to_account, payee_id, biller_id, symbol. Leave out fields the customer did not say, such as a default from_account. Never quote BANK DATA or the assistant.
 Use only ids that appear in BANK DATA."""
 

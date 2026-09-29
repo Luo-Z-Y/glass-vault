@@ -160,7 +160,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases_path=str(args.cases),
             workers=args.workers,
             progress=_progress,
-            meta={**meta, "workers": args.workers},
+            meta={**meta, "workers": args.workers, "gateway_policy": args.agent != "naive"},
+            # The naive baseline gets a plain gateway: its builders would not have our risk rules.
+            gateway_policy=args.agent != "naive",
         )
     except (CliError, CaseError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)

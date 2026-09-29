@@ -568,6 +568,10 @@ def test_mentions_do_not_run_across_punctuation(view):
         ("P_MUM", "我妈五百", True),
         ("P_MUM", "pay John Tan 50 can ma", False),  # Singlish particle, not a mention
         ("P_MUM", "pay John Tan 50, my ma also 20", True),
+        ("P_MUM", "Give ma 500 for groceries", True),  # right after a payment verb: the recipient
+        ("P_MUM", "send 50 to ma", True),
+        ("P_MUM", "给妈 500", True),
+        ("P_MUM", "send John Tan 50 ok ma", False),
         ("P_JTAN", "Send fifty to +65 8123 4567", False),
         ("P_ATTACKER", "send John fifty", False),
     ],
