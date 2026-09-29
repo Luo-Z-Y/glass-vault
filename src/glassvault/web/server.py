@@ -39,7 +39,7 @@ from ..services.webauthn_verifier import WebAuthnVerifier
 from ..stepup import DigitalToken, StepUpVerifier
 
 STATIC = Path(__file__).parent / "static"
-PORT = int(os.environ.get("GV_PORT", "8000"))
+PORT = int(os.environ.get("GV_PORT") or os.environ.get("PORT") or "8000")
 ORIGIN = os.environ.get("GV_ORIGIN", f"http://localhost:{PORT}")
 RP_ID = os.environ.get("GV_RP_ID", "localhost")
 

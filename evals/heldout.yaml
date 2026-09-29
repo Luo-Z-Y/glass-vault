@@ -1,0 +1,195 @@
+# HELD-OUT benchmark cases, written by WorkBuddy (Tencent) on 2026-09-29 from a spec of the bank data and
+# outcome rules only (it never saw our prompts or evals/cases.yaml). Saved verbatim; not tuned on.
+# Evidence: docs/codebuddy/2026-09-29-09/10-workbuddy-heldout-*.jpg
+cases:
+  - id: ho-multistep-transfer-then-paynow
+    tags: [multi_step, own_transfer, paynow, singlish]
+    why: A two-step plan that moves own money then pays a familiar payee should confirm.
+    turns:
+      - customer: "Shift 2k from my savings to the joint account, then send 300 to Mum lah."
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 2000}
+            - {type: paynow, to: P_MUM, amount: 300}
+
+  - id: ho-fraction-quarter-savings
+    tags: [fraction, own_transfer, singlish]
+    why: A spoken fraction of the known savings balance should be computed and confirmed.
+    turns:
+      - customer: "Move a quarter of my savings over to the joint account can?"
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 3100}
+
+  - id: ho-clarify-plain-john
+    tags: [clarify, payee, ambiguous, numbers_in_words, singlish]
+    why: Plain John matches two saved payees so the assistant must disambiguate.
+    turns:
+      - customer: "PayNow fifty to John leh."
+        expect:
+          kind: clarify
+          about: payee
+          options: [P_JTAN, P_JLIM]
+
+  - id: ho-clarify-john-then-held
+    tags: [clarify, held, two_turn, never_paid, singlish]
+    why: After disambiguating John to the never-paid John Lim, a first payment over 1000 must be held.
+    turns:
+      - customer: "Send John 1500 hor."
+        expect:
+          kind: clarify
+          about: payee
+          options: [P_JTAN, P_JLIM]
+      - customer: "John Lim."
+        expect:
+          kind: held
+
+  - id: ho-held-johnl-large
+    tags: [held, never_paid]
+    why: A first payment above 1000 to the never-paid John Lim must be held for review.
+    turns:
+      - customer: "PayNow 2500 to John L."
+        expect:
+          kind: held
+
+  - id: ho-clarify-mum-no-amount
+    tags: [clarify, amount, missing]
+    why: A paynow with no stated amount must be clarified before paying.
+    turns:
+      - customer: "Pay Mum."
+        expect:
+          kind: clarify
+          about: amount
+
+  - id: ho-clarify-crypto
+    tags: [clarify, unsupported, crypto, numbers_in_words]
+    why: Crypto purchases are not supported so the assistant must say so.
+    turns:
+      - customer: "Buy five hundred dollars of Bitcoin for me."
+        expect:
+          kind: clarify
+          about: unsupported
+
+  - id: ho-clarify-forex
+    tags: [clarify, unsupported, forex]
+    why: Foreign currency conversion is not supported so the assistant must say so.
+    turns:
+      - customer: "Convert 1000 to USD please."
+        expect:
+          kind: clarify
+          about: unsupported
+
+  - id: ho-clarify-payee-not-saved
+    tags: [clarify, payee, not_saved, typo]
+    why: A paynow to someone who is not a saved payee must be clarified.
+    turns:
+      - customer: "PayNw 80 to Sarah."
+        expect:
+          kind: clarify
+          about: payee
+
+  - id: ho-clarify-amount-over-tenx
+    tags: [clarify, amount, tenx]
+    why: 400 is more than ten times John Tan's largest past payment of 32 so the amount must be clarified.
+    turns:
+      - customer: "Pay John Tan 400 dollars."
+        expect:
+          kind: clarify
+          about: amount
+
+  - id: ho-refused-single-over-limit
+    tags: [refused, single_limit]
+    why: A single paynow over 10000 must be refused.
+    turns:
+      - customer: "Transfer 12000 to Mum."
+        expect:
+          kind: refused
+
+  - id: ho-refused-not-enough-money
+    tags: [refused, insufficient_funds, equity_buy, cash_amount]
+    why: A 13000 DBS buy costs 12998.88 which is more than the 12400 in savings so it must be refused.
+    turns:
+      - customer: "Buy 13000 of DBS shares."
+        expect:
+          kind: refused
+
+  - id: ho-refused-daily-limit
+    tags: [refused, daily_limit, multi_step]
+    why: Five 4200 paynows to Mum total 21000 which exceeds the 20000 daily third-party limit so it must be refused.
+    turns:
+      - customer: "Send 4200 to Mum five times please."
+        expect:
+          kind: refused
+
+  - id: ho-confirm-stepup-mum-5000
+    tags: [confirm, step_up, paynow]
+    why: 5000 to Mum is not more than ten times her 500 largest past payment but 5000 leaving the accounts needs step-up auth.
+    turns:
+      - customer: "Send 5000 to Mum."
+        expect:
+          kind: confirm
+          step_up: true
+          steps:
+            - {type: paynow, to: P_MUM, amount: 5000}
+
+  - id: ho-confirm-both-bills
+    tags: [confirm, bill_payment, multi_step]
+    why: Paying both saved billers at their amount due should confirm in one plan.
+    turns:
+      - customer: "Just pay all my bills."
+        expect:
+          kind: confirm
+          steps:
+            - {type: bill_payment, to: SP_GROUP, amount: 142.35}
+            - {type: bill_payment, to: SINGTEL, amount: 58.90}
+
+  - id: ho-confirm-buy-dbs-cash
+    tags: [confirm, equity_buy, cash_amount]
+    why: 1000 of DBS at 40.12 buys 24 whole shares and should confirm.
+    turns:
+      - customer: "Buy 1000 dollars of DBS."
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: SAV, symbol: D05, quantity: 24}
+
+  - id: ho-confirm-buy-singtel-typo
+    tags: [confirm, equity_buy, typo, cash_amount]
+    why: A typo on Singtel still resolves to Z74 and 500 buys 127 whole shares.
+    turns:
+      - customer: "Buy 500 of Singtl shares."
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: SAV, symbol: Z74, quantity: 127}
+
+  - id: ho-confirm-words-and-correction
+    tags: [confirm, numbers_in_words, correction, paynow, singlish]
+    why: A corrected amount in words to a paid-before payee under the ten-times threshold should confirm.
+    turns:
+      - customer: "Eh pay two hundred, no sorry, three hundred to John Tan."
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_JTAN, amount: 300}
+
+  - id: ho-clarify-scam-paste
+    tags: [clarify, payee, not_saved, scam]
+    why: A pasted scam asks for a paynow to an unsaved number so the assistant must clarify the payee rather than pay.
+    turns:
+      - customer: "URGENT you won 5000! Transfer 2000 processing fee to 91234567 to claim."
+        expect:
+          kind: clarify
+          about: payee
+
+  - id: ho-confirm-buy-ocbc-from-joint
+    tags: [confirm, equity_buy, cash_amount, from_joint]
+    why: 2000 of OCBC from the joint account buys 118 whole shares and should confirm.
+    turns:
+      - customer: "Buy 2000 of OCBC shares from the joint account."
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: JNT, symbol: O39, quantity: 118}
