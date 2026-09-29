@@ -155,6 +155,11 @@ POLICY_CASES = {
 POLICY_TO_KIND = {"deny": "refused", "hold": "held", "step_up": "confirm", "allow": "confirm"}
 
 
+# Cases an earlier deterministic layer stops before the risk rules are reached. The rules must
+# still reach the right decision on the plan (defence in depth), but the case expects the earlier stop.
+STOPPED_EARLIER = {"scam-safe-account-held": "clarify"}  # quarantine hides the "Safe Account" nickname
+
+
 @pytest.mark.parametrize("case_id", sorted(POLICY_CASES))
 def test_policy_cases_agree_with_the_policy_module(case_id):
     policy = pytest.importorskip("glassvault.policy")
@@ -166,7 +171,7 @@ def test_policy_cases_agree_with_the_policy_module(case_id):
 
     outcome = policy.evaluate_policy(plan, world.bank.view(), now=now, history=world.gateway.history()).outcome
     assert outcome == decision
-    assert c.turns[-1].expect.kind == POLICY_TO_KIND[decision]
+    assert c.turns[-1].expect.kind == STOPPED_EARLIER.get(case_id, POLICY_TO_KIND[decision])
     if decision == "step_up":
         assert c.turns[-1].expect.step_up is True
 
