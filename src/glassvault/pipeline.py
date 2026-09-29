@@ -36,7 +36,7 @@ from .gateway import Execution, Gateway, GatewayError
 from .llm import LLM, LLMResponse
 from .numbers import confusable_reasons, extract_amounts, extract_fractions
 from .policy import evaluate_policy
-from .renderer import render
+from .renderer import RenderError, render
 from .schema import (
     BillPayment,
     Challenge,
@@ -229,7 +229,13 @@ class Pipeline:
         if decision.outcome == "hold":
             raise _Stop("held", MSG_HELD.format(reasons=reasons), plan=plan, policy=decision)
 
-        confirmation = render(plan, decision, view)
+        try:
+            confirmation = render(plan, decision, view)
+        except RenderError as e:
+            # A plan the customer cannot be shown truthfully must not be signed. Logged under "challenge",
+            # the stage the security console shows as the bank-rendered confirmation.
+            trace.append(TraceEvent("challenge", False, f"renderer refused: {e}"))
+            raise _Stop("frozen", MSG_FROZEN, plan=plan) from e
         try:
             challenge = self._gateway.issue_challenge(
                 plan, script_hash=confirmation.script_hash, policy_decision_id=decision.id
