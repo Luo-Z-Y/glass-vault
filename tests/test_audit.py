@@ -1,3 +1,5 @@
+"""The audit log: an intact chain verifies, and an edited or deleted entry is caught."""
+
 import dataclasses
 from datetime import UTC, datetime
 from decimal import Decimal

@@ -24,6 +24,7 @@ class DigitalToken:
         self._secret = secret or secrets.token_bytes(32)
 
     def code(self, nonce: str) -> str:
+        """The 6-digit code for the approval with this nonce: what the token's screen would show."""
         mac = hmac.new(self._secret, b"glassvault-step-up:" + nonce.encode(), hashlib.sha256).digest()
         return str(int.from_bytes(mac[:8], "big") % 10**DIGITS).zfill(DIGITS)
 
@@ -36,9 +37,11 @@ class StepUpVerifier:
         self._failures: dict[str, int] = {}
 
     def enrol(self, customer_id: str, token: DigitalToken) -> None:
+        """Pair a customer with their token. A real bank does this at onboarding, out of the agent's reach."""
         self._tokens[customer_id] = token
 
     def verify(self, customer_id: str, nonce: str, code: object) -> bool:
+        """True if `code` is this customer's code for this nonce, compared in constant time."""
         token = self._tokens.get(customer_id)
         if token is None or not isinstance(code, str):
             return False

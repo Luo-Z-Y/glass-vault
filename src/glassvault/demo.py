@@ -1,7 +1,8 @@
-"""Week-1 demo: one signed happy path, then a rogue agent tries six attacks.
+"""CLI demo: one signed happy path, then a rogue agent tries six attacks on the gateway.
 
-The plan below is hand-written in place of the LLM drafter, which arrives in
-week 2. Run with: uv run python -m glassvault.demo
+The plan below is written by hand, so this runs without an LLM; the web demo
+(``python -m glassvault.web.server``) runs the full pipeline.
+Run with: uv run python -m glassvault.demo
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ UTTERANCE = "Move a grand to my joint account, buy DBS shares with half of it, a
 
 
 def main() -> None:
+    """Enrol the customer's device, execute the brief's example, then try each attack and report."""
     now = datetime.now(UTC)
     bank = seed_bank(now.date())
     audit = AuditLog()
@@ -61,6 +63,7 @@ def main() -> None:
     blocked = 0
 
     def attempt(label: str, fn) -> None:
+        """Run one attack and print whether the gateway blocked it."""
         nonlocal blocked
         try:
             fn()

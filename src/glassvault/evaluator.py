@@ -57,6 +57,8 @@ def destination_label(records: Any, step_type: StepType, to: str, equity: Equity
 
 
 class EvaluationError(Exception):
+    """The plan cannot be carried out as written; `code` says why (listed in docs/CONTRACTS.md)."""
+
     def __init__(self, code: str, message: str, step_id: str | None = None):
         super().__init__(f"{code}: {message}" + (f" (step {step_id})" if step_id else ""))
         self.code = code
@@ -65,6 +67,12 @@ class EvaluationError(Exception):
 
 
 def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
+    """Work out every amount in `plan`, running its steps in order against a copy of the balances.
+
+    Each share buy takes a fresh quote from `view.market`, so resolving the same
+    plan twice gives different quote ids. The balances in `view` are not touched.
+    Raises EvaluationError if a step names something unknown or cannot be paid for.
+    """
     balances = {a.id: a.balance for a in view.accounts.values()}
     cash_by_step: dict[str, Decimal] = {}
     resolved: list[ResolvedStep] = []
@@ -161,6 +169,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
 
 def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], balances: dict[str, Decimal],
             step_id: str) -> Decimal:
+    """The cash an amount stands for when its step runs, given earlier steps' cash and the running balances."""
     if isinstance(expr, FixedAmount):
         return expr.value.quantize(CENT, rounding=ROUND_DOWN)
     if isinstance(expr, FractionOfBalance):

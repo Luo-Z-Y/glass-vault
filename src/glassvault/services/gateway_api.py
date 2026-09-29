@@ -81,6 +81,8 @@ class _Wire(BaseModel):
 
 
 class ChallengeRequest(_Wire):
+    """A plan the agent wants the customer to approve, and the hashes its challenge should carry."""
+
     plan: ResolvedPlan
     script_hash: str | None = Field(default=None, max_length=128)
     policy_decision_id: str | None = Field(default=None, max_length=128)
@@ -90,6 +92,8 @@ B64Url = Annotated[str, Field(max_length=8192, pattern=r"^[A-Za-z0-9_-]*={0,2}$"
 
 
 class AssertionResponseJSON(BaseModel):
+    """The signed parts of a passkey assertion, base64url-encoded."""
+
     model_config = ConfigDict(extra="ignore")
 
     clientDataJSON: B64Url
@@ -110,6 +114,8 @@ class AssertionJSON(BaseModel):
 
 
 class ExecuteRequest(_Wire):
+    """An approval: the challenge's nonce and one proof, a passkey assertion or a raw device signature."""
+
     # Optional: the gateway executes its own copy; a plan sent here must hash to what was approved.
     plan: ResolvedPlan | None = None
     nonce: str | None = Field(default=None, max_length=128)
@@ -128,6 +134,7 @@ class ExecuteRequest(_Wire):
         return self
 
     def proof(self) -> Any:
+        """The proof as the gateway's verifier takes it: assertion JSON, signature bytes, or None."""
         if self.assertion is not None:
             return self.assertion.model_dump(exclude_none=True)
         if self.signature is not None:
@@ -136,19 +143,27 @@ class ExecuteRequest(_Wire):
 
 
 class NonceRequest(_Wire):
+    """Names a pending challenge by its nonce."""
+
     nonce: str = Field(min_length=1, max_length=128)
 
 
 class QuoteRequest(_Wire):
+    """Asks for a share quote."""
+
     symbol: str = Field(min_length=1, max_length=16)
 
 
 class EnrolmentRequest(_Wire):
+    """Starts adding a passkey. Needs the one-time code printed on the gateway's console."""
+
     enrolment_code: str = Field(max_length=64)
     customer_id: str | None = Field(default=None, max_length=64)
 
 
 class EnrolmentVerifyRequest(EnrolmentRequest):
+    """Finishes adding a passkey with the browser's new credential, under the same one-time code."""
+
     credential: dict[str, Any]
 
 
@@ -196,7 +211,11 @@ def snapshot_json(view: BankView) -> dict[str, Any]:
 
 
 def view_from_snapshot(data: Mapping[str, Any], market: Any) -> BankView:
-    """Rebuild a read-only ``BankView`` from a ``/view`` body; ``market`` supplies quotes."""
+    """Rebuild a read-only ``BankView`` from a ``/view`` body; ``market`` supplies quotes.
+
+    The snapshot has no statement, so ``transactions`` is empty: enquiries through a
+    remote gateway list only the payments it executed.
+    """
     accounts = {a["id"]: Account(a["id"], a["name"], Decimal(a["balance"])) for a in data["accounts"]}
     payees = {
         p["id"]: Payee(
@@ -227,6 +246,7 @@ def view_from_snapshot(data: Mapping[str, Any], market: Any) -> BankView:
 
 
 def quote_json(quote: Quote) -> dict[str, Any]:
+    """A quote as JSON, with its price and times as strings."""
     return {
         "quote_id": quote.quote_id,
         "symbol": quote.symbol,
@@ -263,6 +283,7 @@ class EnrolmentCode:
 
     @staticmethod
     def _new() -> str:
+        """Twelve random hex digits in groups of four, e.g. "a1b2-c3d4-e5f6"."""
         raw = secrets.token_hex(6)
         return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
@@ -271,9 +292,11 @@ class EnrolmentCode:
         return self._code
 
     def matches(self, candidate: str) -> bool:
+        """True if `candidate` is the current code, compared in constant time."""
         return secrets.compare_digest(candidate.strip().encode(), self._code.encode())
 
     def rotate(self) -> str:
+        """Replace the code once it has been used, and return the new one."""
         self._code = self._new()
         return self._code
 
@@ -364,14 +387,17 @@ def create_gateway_app(
     )
 
     def audit(kind: str, data: dict[str, Any]) -> None:
+        """Write to the gateway's own audit log, under the service lock."""
         with lock:
             gateway.audit.append(kind, data, at=gateway.now())
 
     def refuse(code: str, status: int, message: str, **data: Any) -> NoReturn:
+        """Audit a refusal by this HTTP layer, then raise it."""
         audit("REQUEST_REFUSED", {"code": code, **data})
         raise ApiError(code, status, message)
 
     def approval_body(challenge: Challenge) -> dict[str, Any]:
+        """The challenge, and a passkey prompt whose challenge bytes are its digest."""
         digest = challenge_digest(challenge)
         if verifier is not None:
             options = verifier.authentication_options(challenge.customer_id, digest)
@@ -380,17 +406,20 @@ def create_gateway_app(
         return {"challenge": challenge.model_dump(mode="json"), "webauthn_options": options}
 
     def issue(plan: ResolvedPlan, **binding: str | None) -> dict[str, Any]:
+        """Have the gateway check `plan` and issue a challenge, and remember it for the device."""
         with lock:
             challenge = gateway.issue_challenge(plan, **binding)
             issued[challenge.nonce] = challenge
             return approval_body(challenge)
 
     def require_passkeys() -> WebAuthnVerifier:
+        """The passkey verifier; a gateway that approves with raw device keys answers 501."""
         if verifier is None:
             raise ApiError("PASSKEYS_NOT_CONFIGURED", 501, "this gateway approves with raw device keys")
         return verifier
 
     def enrolling_customer(req: EnrolmentRequest) -> str:
+        """The customer being enrolled, once the one-time code checks out; refusals are audited."""
         customer_id = req.customer_id or bank.customer_id
         if customer_id != bank.customer_id:
             refuse("UNKNOWN_CUSTOMER", 404, "no such customer", path="enrolment", customer_id=customer_id)
@@ -422,6 +451,7 @@ def create_gateway_app(
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        """Liveness, plus the WebAuthn settings a client has to match."""
         return {
             "status": "ok",
             "service": "gateway",
@@ -439,11 +469,13 @@ def create_gateway_app(
 
     @app.get("/view")
     def view() -> dict[str, Any]:
+        """A read-only snapshot of the customer's accounts, payees, billers and listings."""
         with lock:
             return {**snapshot_json(bank.view()), "as_of": gateway.now().isoformat()}
 
     @app.post("/quotes")
     def quote(req: QuoteRequest) -> dict[str, Any]:
+        """A fresh share quote, valid for 60 seconds by the gateway's clock."""
         with lock:
             issued_quote = bank.market.quote(req.symbol)  # stamped by the gateway's clock
         if issued_quote is None:
@@ -452,6 +484,7 @@ def create_gateway_app(
 
     @app.get("/history")
     def history(since: AwareDatetime | None = None) -> dict[str, Any]:
+        """Executed steps, oldest first, optionally from `since`; the risk rules and transaction enquiries read these."""
         with lock:
             executions = gateway.history(since)
         return {
@@ -462,6 +495,7 @@ def create_gateway_app(
 
     @app.get("/audit")
     def audit_log(since: int = Query(default=0, ge=0)) -> dict[str, Any]:
+        """The audit log from entry `since`, and whether its hash chain is intact."""
         with lock:
             entries = gateway.audit.entries
             broken = gateway.audit.first_broken()
@@ -477,6 +511,7 @@ def create_gateway_app(
 
     @app.post("/challenges")
     def challenges(req: ChallengeRequest) -> dict[str, Any]:
+        """Have the gateway check a plan and issue a challenge for the customer to sign."""
         # The gateway validates the plan (labels, live balances) and audits refusals.
         return issue(req.plan, script_hash=req.script_hash, policy_decision_id=req.policy_decision_id)
 
@@ -496,6 +531,7 @@ def create_gateway_app(
 
     @app.post("/execute")
     def execute(req: ExecuteRequest) -> dict[str, Any]:
+        """Execute an approved plan. The gateway runs its own stored copy, never one sent here."""
         with lock:
             receipts = gateway.execute(req.plan, nonce=req.nonce, signature=req.proof())
             issued.pop(req.nonce or "", None)
@@ -505,6 +541,7 @@ def create_gateway_app(
 
     @app.post("/webauthn/register/options")
     def register_options(req: EnrolmentRequest) -> dict[str, Any]:
+        """Start adding a passkey: the options for the browser's `navigator.credentials.create()`."""
         passkeys = require_passkeys()
         customer_id = enrolling_customer(req)
         with lock:
@@ -513,6 +550,7 @@ def create_gateway_app(
 
     @app.post("/webauthn/register/verify")
     def register_verify(req: EnrolmentVerifyRequest) -> dict[str, Any]:
+        """Finish adding a passkey. On success the code rotates and the next one goes to the console log."""
         passkeys = require_passkeys()
         customer_id = enrolling_customer(req)
         with lock:
@@ -526,6 +564,7 @@ def create_gateway_app(
 
     @app.get("/webauthn/passkeys")
     def list_passkeys() -> dict[str, Any]:
+        """The customer's registered passkeys: ids, counters and dates, nothing secret."""
         passkeys = require_passkeys()
         with lock:
             return {"passkeys": [p.summary() for p in passkeys.passkeys(bank.customer_id)]}
@@ -534,12 +573,14 @@ def create_gateway_app(
 
     @app.get("/dev", include_in_schema=False)
     def dev_page() -> FileResponse:
+        """The passkey dev harness page."""
         return FileResponse(DEV_PAGE, media_type="text/html")
 
     if dev_tools:
 
         @app.post("/dev/sample-challenge")
         def sample_challenge() -> dict[str, Any]:
+            """A challenge over SAMPLE_PLAN, so /dev can try an approval without the agent service."""
             with lock:
                 try:
                     plan = resolve(SAMPLE_PLAN, bank.view(), now=gateway.now())
@@ -564,6 +605,7 @@ class GatewayRequestError(Exception):
 
 
 def _raise_for_error(response: Any) -> None:
+    """Raise what an error response carries: GatewayError for the gateway's codes, GatewayRequestError otherwise."""
     if response.status_code < 400:
         return
     try:
@@ -578,6 +620,8 @@ def _raise_for_error(response: Any) -> None:
 
 @dataclass(frozen=True)
 class IssuedChallenge:
+    """A challenge and the passkey prompt the customer's device needs to sign it."""
+
     challenge: Challenge
     webauthn_options: dict[str, Any]
 
@@ -600,6 +644,7 @@ class RemoteMarket:
         return listing[0] if listing else None
 
     def quote(self, symbol: str, now: datetime | None = None) -> Quote | None:
+        """A fresh quote from the gateway, remembered so `issued` can find it."""
         quote = self._client.quote(symbol)
         if quote is not None:
             self._issued[quote.quote_id] = quote
@@ -622,6 +667,7 @@ class GatewayClient:
 
     @classmethod
     def connect(cls, base_url: str = DEFAULT_ORIGIN, *, timeout: float = 10.0) -> GatewayClient:
+        """A client for the gateway service at `base_url`."""
         return cls(httpx.Client(base_url=base_url, timeout=timeout))
 
     def _call(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -633,11 +679,13 @@ class GatewayClient:
         return datetime.fromisoformat(self._call("GET", "/now")["now"])
 
     def view(self) -> BankView:
+        """The gateway's snapshot as a BankView whose market asks the gateway for quotes."""
         data = self._call("GET", "/view")
         listings = {x["symbol"]: (x["name"], Decimal(x["price"])) for x in data["listings"]}
         return view_from_snapshot(data, RemoteMarket(self, listings))
 
     def quote(self, symbol: str) -> Quote | None:
+        """A quote from the gateway, or None for a symbol it does not list."""
         try:
             data = self._call("POST", "/quotes", json={"symbol": symbol})
         except GatewayRequestError as e:
@@ -660,6 +708,7 @@ class GatewayClient:
     def request_challenge(
         self, plan: ResolvedPlan, *, script_hash: str | None = None, policy_decision_id: str | None = None
     ) -> IssuedChallenge:
+        """Ask for a challenge over `plan`; the reply also carries the passkey prompt for the device."""
         body = {
             "plan": plan.model_dump(mode="json"),
             "script_hash": script_hash,
@@ -684,6 +733,7 @@ class GatewayClient:
         assertion: Mapping[str, Any] | None = None,
         signature: bytes | None = None,
     ) -> list[Receipt]:
+        """Relay the customer's approval: a passkey `assertion`, or a raw `signature` for a DeviceKey gateway."""
         body: dict[str, Any] = {"nonce": nonce}
         if plan is not None:
             body["plan"] = plan.model_dump(mode="json")
@@ -695,6 +745,7 @@ class GatewayClient:
         return [Receipt(**r) for r in data["receipts"]]
 
     def audit(self, since: int = 0) -> dict[str, Any]:
+        """The gateway's audit log from entry `since`, with the chain's status."""
         return self._call("GET", "/audit", params={"since": since})
 
 
@@ -702,6 +753,7 @@ class GatewayClient:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Run the gateway service over a freshly seeded bank and print the first enrolment code."""
     parser = argparse.ArgumentParser(
         prog="python -m glassvault.services.gateway_api",
         description="Glass Vault gateway: the only service that can move money.",

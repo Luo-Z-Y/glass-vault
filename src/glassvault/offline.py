@@ -1,8 +1,9 @@
 """Rule-based stand-in for the LLM, so the demo runs without an API key.
 
-It speaks the same tool protocol as a real model (a plan tool and a clarify
-tool) and understands the demo's phrasings: transfers between own accounts,
-PayNow to saved payees, bills, and SGX share buys, including "half of it".
+It speaks the same tool protocol as a real model (a plan tool, a clarify tool
+and the drafter's enquiry tool) and understands the demo's phrasings: transfers
+between own accounts, PayNow to saved payees, bills, SGX share buys including
+"half of it", and balance or recent-transaction questions.
 It is deliberately simple; the real drafter is an LLM. Everything downstream
 (provenance, validator diff, policy, gateway) treats its output exactly like
 an LLM's.
@@ -20,6 +21,7 @@ from .context import payee_matches
 from .llm import LLMResponse, tool_response
 from .numbers import extract_amounts, extract_fractions
 
+# Requests the stand-in does not draft; it says what it can do instead.
 UNSUPPORTED = re.compile(r"\b(loan|borrow|crypto|bitcoin|btc|usd|us dollars?|overseas|remit|wire|invest in funds?)\b", re.I)
 VERB = r"(?:pay|send|move|transfer|put|give|buy|top\s+up|invest)"
 # Commas and full stops split clauses, except inside numbers ("1,500", "1.2k").
@@ -27,11 +29,17 @@ CLAUSE_SPLIT = re.compile(rf"(?:;|[,.](?!\d)|\bthen\b|\balso\b|\band\b(?=\s+(?:t
 SHARES = re.compile(r"\b(shares?|stocks?|invest)\b", re.I)
 BILL = re.compile(r"\bbill\b", re.I)
 ALL_BILLS = re.compile(r"\b(?:both|all)\s+(?:of\s+)?(?:my\s+)?bills\b", re.I)
+# Never the first or last word of a payee reference ("send John fifty" quotes "John").
 STOPWORDS = {"send", "pay", "give", "transfer", "move", "to", "my", "the", "a", "for", "please", "dollars",
              "dollar", "bucks", "sgd", "s", "and", "some", "money", "via", "paynow", "on", "of", "it"}
 
 
 class OfflineLLM:
+    """A rule-based model with the LLM interface: every call gets one plan, clarify or enquiry tool call.
+
+    `view` is called on each chat, so the rules always read current bank data.
+    """
+
     def __init__(self, view: Callable[[], BankView], *, name: str = "offline"):
         self._view = view
         self.name = name
@@ -73,6 +81,12 @@ def _turns(messages: Sequence[dict]) -> tuple[list[str], list[str]]:
 
 
 def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> dict[str, Any]:
+    """The tool arguments for a request: {"steps": [...]} for a plan, {"enquiry": {...}} for a
+    balance or history question, or a clarifying question.
+
+    Only the first customer turn is parsed into steps, clause by clause; later
+    turns can only settle which payee an ambiguous name meant.
+    """
     if not customer:
         return _ask("missing_info", "What would you like to do?")
     request = customer[0]
@@ -169,6 +183,9 @@ def _ask(reason: str, question: str, options: list[dict[str, str]] | None = None
 
 def _amount(clause: str, steps: list[dict[str, Any]], view: BankView | None = None
             ) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    """The clause's amount and its evidence, trying in turn: a fraction of a named account
+    ("a quarter of my savings"), a fraction of the previous step ("half of it"), a fixed amount.
+    """
     fractions = extract_fractions(clause)
     if fractions and view is not None:
         f = fractions[0]
@@ -189,6 +206,7 @@ def _amount(clause: str, steps: list[dict[str, Any]], view: BankView | None = No
 
 
 def _symbol(clause: str, view: BankView) -> tuple[str | None, str]:
+    """The first seed-bank share whose company's first word ("DBS", "OCBC") is in the clause."""
     for symbol in ("D05", "O39", "Z74"):
         name = view.market.name(symbol)
         if not name:
@@ -200,6 +218,7 @@ def _symbol(clause: str, view: BankView) -> tuple[str | None, str]:
 
 
 def _biller(clause: str, view: BankView) -> tuple[str | None, str]:
+    """The first biller whose name's first word ("SP", "Singtel") is in the clause."""
     for biller in view.billers.values():
         word = biller.name.split()[0]
         if m := re.search(rf"\b{re.escape(word)}\b", clause, re.I):
@@ -208,6 +227,7 @@ def _biller(clause: str, view: BankView) -> tuple[str | None, str]:
 
 
 def _own_account(clause: str, view: BankView) -> tuple[str, str] | None:
+    """An own account named after "to" or "into" ("to my joint account"), and the word that named it."""
     for account in view.accounts.values():
         word = account.name.split()[0]
         if m := re.search(rf"\b(?:to|into)\s+(?:my\s+|the\s+|our\s+)?({re.escape(word)})\b", clause, re.I):
@@ -232,4 +252,5 @@ def _payee(clause: str, view: BankView) -> tuple[str, list[str]]:
 
 
 def _mentions(text: str, payee_id: str, view: BankView) -> bool:
+    """True if later turns single out this payee, by legal name or by words that match only them."""
     return view.payees[payee_id].legal_name.lower() in text.lower() or payee_matches(text, view) == [payee_id]

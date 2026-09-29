@@ -1,3 +1,5 @@
+"""The benchmark: case loading and validation, scoring from the ledger, the oracle self-test, and the naive baseline."""
+
 import json
 import sys
 import types

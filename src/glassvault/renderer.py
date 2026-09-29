@@ -64,6 +64,11 @@ class RenderError(Exception):
 
 
 def render(plan: ResolvedPlan, policy: PolicyDecision, view: BankView) -> ConfirmationView:
+    """The confirmation for one plan: screen lines, the spoken script and its hash.
+
+    Raises RenderError rather than show anything bank records cannot vouch for,
+    or a policy decision that was made for a different plan.
+    """
     if not well_formed(plan):
         raise RenderError("INVALID_PLAN", "plan does not pass the schema's checks")
     if plan.customer_id != view.customer_id:
@@ -157,6 +162,7 @@ def _describe(s: ResolvedStep, view: BankView, *, unusual: bool) -> tuple[str, s
 
 
 def _account(account_id: str, view: BankView, step_id: str) -> str:
+    """An account's name from bank records; an account the customer does not hold is a RenderError."""
     account = view.accounts.get(account_id)
     if account is None:
         raise RenderError("UNKNOWN_COUNTERPARTY", "account is not on the customer's profile", step_id)
@@ -192,6 +198,7 @@ def _policy_note(reason: PolicyReason, position: dict[str, int], view: BankView)
 
 
 def _reason_text(code: str, view: BankView) -> tuple[str, str]:
+    """The fixed wording for one reason code, as (screen line, spoken clause), with this customer's limits."""
     limits = tier_limits(view.kyc_tier)
     hours = int(NEW_PAYEE_COOLING.total_seconds() // 3600)
     minutes = int(VELOCITY_WINDOW.total_seconds() // 60)
@@ -290,6 +297,7 @@ def _cents(value: Decimal) -> int:
 
 
 def _int_words(n: int) -> str:
+    """A whole number in British English words: 1005 -> "one thousand and five"."""
     if n < 0:
         raise ValueError("negative")
     if n == 0:
@@ -325,6 +333,7 @@ def _count(n: int, noun: str) -> str:
 
 
 def _digit_words(digits: str) -> str:
+    """Digits read one by one: "4521" -> "four-five-two-one"."""
     return "-".join(_ONES[int(d)] for d in digits)
 
 

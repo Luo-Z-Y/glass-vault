@@ -38,6 +38,7 @@ class CliError(Exception):
 
 
 def _llm(role: str) -> Any:
+    """The drafter's or validator's model from GV_* settings; a missing setting is a one-line CliError."""
     try:
         from ..llm import llm_from_env
     except ImportError as e:
@@ -49,6 +50,7 @@ def _llm(role: str) -> Any:
 
 
 def _glassvault_factory() -> AgentFactory:
+    """Glass Vault's AgentFactory, from `pipeline.agent_factory`."""
     try:
         from ..pipeline import agent_factory
     except ImportError as e:
@@ -71,6 +73,7 @@ def _glassvault_factory() -> AgentFactory:
 
 
 def _agent(name: str) -> tuple[AgentFactory | CaseAwareFactory, dict[str, Any]]:
+    """The factory for `--agent`, and the model names to record in the scorecard."""
     models = {k: os.environ[k] for k in ("GV_DRAFTER_MODEL", "GV_VALIDATOR_MODEL") if os.environ.get(k)}
     if name == "oracle":
         return Oracle(), {}
@@ -93,6 +96,7 @@ def _preflight(factory: AgentFactory | CaseAwareFactory, case: Case) -> None:
 
 
 def _select(cases: list[Case], only: Sequence[str], tags: Sequence[str], exclude: Sequence[str]) -> list[Case]:
+    """The cases chosen by --only, --tags and --exclude-tags; an unknown --only id is an error."""
     unknown = set(only) - {c.id for c in cases}
     if unknown:
         raise CliError(f"unknown case id(s): {', '.join(sorted(unknown))}")
@@ -105,6 +109,7 @@ def _select(cases: list[Case], only: Sequence[str], tags: Sequence[str], exclude
 
 
 def _progress(result: CaseResult) -> None:
+    """One line per finished case on stderr, so a long run shows how it is going."""
     mark = "ok  " if result.success else "MISS"
     unsafe = f"  UNSAFE x{result.unsafe_executions}" if result.unsafe_executions else ""
     got = ",".join(t.actual for t in result.turns)
@@ -122,6 +127,7 @@ def _csv(value: str | None) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the CLI. Exit code 2 for a usage or setup error; 1 with --fail-on-unsafe if money moved unexpectedly."""
     parser = argparse.ArgumentParser(prog="python -m glassvault.evals", description=__doc__.split("\n")[0])
     parser.add_argument("--agent", choices=["naive", "glassvault", "oracle"])
     parser.add_argument("--cases", type=Path, default=Path("evals/cases.yaml"))

@@ -15,11 +15,13 @@ from typing import Any
 
 from .crypto import canonical_bytes, sha256_hex
 
-GENESIS = "0" * 64
+GENESIS = "0" * 64  # the prev_hash of the first entry
 
 
 @dataclass(frozen=True)
 class AuditEntry:
+    """One log entry. `hash` covers every other field, `prev_hash` included: that is the chain."""
+
     seq: int
     at: str
     kind: str
@@ -35,6 +37,8 @@ def _entry_hash(seq: int, at: str, kind: str, data: dict[str, Any], prev_hash: s
 
 
 class AuditLog:
+    """Append-only and thread-safe. With `path`, every entry is also appended to a JSONL file."""
+
     def __init__(self, path: Path | None = None):
         self._path = path
         self._entries: list[AuditEntry] = []
@@ -45,6 +49,7 @@ class AuditLog:
         return tuple(self._entries)
 
     def append(self, kind: str, data: dict[str, Any], *, at: datetime) -> AuditEntry:
+        """Record one event and return its entry. Decimals and datetimes in `data` are stored as strings."""
         # Round-trip through canonical JSON so what we store is exactly what we hashed.
         data = json.loads(canonical_bytes(data))
         with self._lock:

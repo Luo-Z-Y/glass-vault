@@ -351,6 +351,7 @@ class _Text:
         self.n = len(self.toks)
 
     def word(self, i: int) -> str | None:
+        """Token i in lower case if it is a word; None for numbers, symbols and positions off either end."""
         return self.toks[i].low if 0 <= i < self.n and self.toks[i].kind == "word" else None
 
     def joined(self, i: int, *, hyphen: bool = True) -> bool:
@@ -361,6 +362,7 @@ class _Text:
         return (_JOIN if hyphen else _SPACES).fullmatch(gap) is not None
 
     def attached(self, i: int) -> bool:
+        """Token i touches the token before it, with not even a space between ("5k", "S$50")."""
         return 0 < i < self.n and self.toks[i - 1].end == self.toks[i].start
 
     def word_run(self, i: int, limit: int = 16) -> list[int]:

@@ -103,6 +103,7 @@ def validator_messages(dialogue: Sequence[Turn], context: AgentContext) -> list[
 
 
 def independent_run(dialogue: Sequence[Turn], context: AgentContext, llm: LLM) -> DraftRun:
+    """Like `independent_plan`, but also returns every raw model response."""
     if not any(t.role == "customer" and t.text.strip() for t in dialogue):
         raise DraftError("the dialogue has no customer request to check")
     catalog = Catalog.from_prompt_data(context.prompt_data)
@@ -122,6 +123,8 @@ def independent_plan(dialogue: Sequence[Turn], context: AgentContext, llm: LLM) 
 
 @dataclass(frozen=True)
 class StepDiff:
+    """One difference between the draft and the independent reading, worded from bank records."""
+
     kind: Literal["missing", "extra", "changed"]
     step: str  # the draft's step id; for "missing", the independent reading's step id
     detail: str
@@ -129,6 +132,8 @@ class StepDiff:
 
 @dataclass(frozen=True)
 class PlanDiff:
+    """The comparison; `matches` is True only when there are no differences at all."""
+
     matches: bool
     diffs: tuple[StepDiff, ...]
 
@@ -185,6 +190,7 @@ def diff_plans(draft: ResolvedPlan, check: ResolvedPlan) -> PlanDiff:
 
 
 def _fields(step: ResolvedStep) -> dict[str, Any]:
+    """What must agree for two steps to match; share buys compare the share count, not the quote."""
     fields: dict[str, Any] = {"from_account": step.from_account, "to": step.to}
     if step.type == "equity_buy":
         fields["quantity"] = step.equity.quantity if step.equity else None
@@ -194,11 +200,13 @@ def _fields(step: ResolvedStep) -> dict[str, Any]:
 
 
 def _shared_fields(a: ResolvedStep, b: ResolvedStep) -> int:
+    """How many of those fields agree, used to pair a changed step with the step it replaced."""
     fa, fb = _fields(a), _fields(b)
     return sum(fa[k] == fb[k] for k in fa)
 
 
 def _changed(draft: ResolvedStep, check: ResolvedStep) -> str:
+    """Every field on which a paired draft step and independent step disagree, in one line."""
     parts = []
     if draft.from_account != check.from_account:
         parts.append(f"paid from {draft.from_account} in the draft vs {check.from_account} from the transcript")

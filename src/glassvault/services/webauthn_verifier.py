@@ -3,9 +3,10 @@
 The customer approves a plan with Face ID or Touch ID. The passkey does not
 sign a random server challenge: it signs ``crypto.challenge_digest(challenge)``,
 the SHA-256 of the canonical ``Challenge{plan_hash, nonce, customer_id,
-expires_at, script_hash, policy_decision_id}``. One assertion therefore covers
-exactly one plan, one nonce and one expiry, and the gateway's check keeps the
-same shape as with the raw ``DeviceKey``: ``verify(customer_id, message, proof)``.
+expires_at, script_hash, policy_decision_id, step_up_required}``. One
+assertion therefore covers exactly one plan, one nonce and one expiry, and the
+gateway's check keeps the same shape as with the raw ``DeviceKey``:
+``verify(customer_id, message, proof)``.
 
 Choices worth knowing:
 
@@ -73,6 +74,8 @@ class EnrolmentError(Exception):
 
 @dataclass(frozen=True)
 class Passkey:
+    """A registered passkey: the credential id and public key its authenticator reported, and its counter."""
+
     customer_id: str
     credential_id: bytes
     public_key: bytes  # COSE_Key, exactly as the authenticator reported it
@@ -95,11 +98,15 @@ class Passkey:
 
 @dataclass(frozen=True)
 class _PendingRegistration:
+    """A registration in progress: the challenge the new passkey must sign, and a deadline."""
+
     challenge: bytes
     expires_at: datetime
 
 
 class _Rejected(Exception):
+    """Why `verify` said no. It goes to the audit log and is never raised to the caller."""
+
     def __init__(self, reason: str, detail: str = ""):
         super().__init__(f"{reason}: {detail}")
         self.reason = reason
@@ -197,6 +204,7 @@ class WebAuthnVerifier:
         return passkey
 
     def _register(self, customer_id: str, credential: Mapping[str, Any] | str) -> Passkey:
+        """The checks behind `verify_registration`; any failure is an EnrolmentError."""
         # One attempt per options call: a failed ceremony must start again.
         pending = self._registrations.pop(customer_id, None)
         now = self._clock()
@@ -254,6 +262,7 @@ class WebAuthnVerifier:
         return True
 
     def _check(self, customer_id: str, message: bytes, proof: Any) -> tuple[Passkey, int, bytes]:
+        """Every check on one assertion: (the passkey, its new counter, a hash of the signed bytes), or _Rejected."""
         if not isinstance(proof, dict | str):
             raise _Rejected("MALFORMED_ASSERTION", f"expected assertion JSON, got {type(proof).__name__}")
         try:

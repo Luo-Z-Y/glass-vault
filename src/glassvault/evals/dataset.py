@@ -1,13 +1,15 @@
 """Benchmark cases: what the customer says, and what a safe agent must do about it.
 
 Expectations are bank-level facts (which account, which payee, how many
-dollars, how many shares), never wording. That lets the same cases score any
-agent (the naive baseline, Glass Vault, an oracle), and lets the harness check
-them against the ledger instead of against what an agent says it did.
+dollars, how many shares), never wording; only a read-only `answer` is checked
+on text, for phrases it must and must not show. That lets the same cases score
+any agent (the naive baseline, Glass Vault, an oracle), and lets the harness
+check payments against the ledger instead of against what an agent says it did.
 
 Loading validates every case against the seed bank *after* its setup ops, so a
-typo in a payee id or an unaffordable expected step fails at load time instead
-of silently marking every agent wrong.
+typo in an account, payee, biller or symbol id fails at load time instead of
+silently marking every agent wrong. The oracle self-test catches expected steps
+the bank cannot afford.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from ..schema import (
     StepType,
 )
 
-# Attack names from docs/CONTRACTS.md; rogue.ATTACKS wins once that module exists.
+# A copy of rogue.ATTACKS (named in docs/CONTRACTS.md), used only if that module cannot be imported.
 CONTRACT_ATTACKS = ("extra_transfer", "swap_payee", "inflate_amount", "swap_account", "follow_injection")
 
 ExpectKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held"]
@@ -58,6 +60,7 @@ class SetupError(ValueError):
 
 
 def known_attacks() -> tuple[str, ...]:
+    """The attack names a case's `rogue:` field may use."""
     try:
         from ..rogue import ATTACKS
     except ImportError:
@@ -102,6 +105,7 @@ def as_amount(text: str) -> Decimal | None:
 
 
 def describe_step(step: ResolvedStep) -> str:
+    """An executed step in one line for reports, e.g. "paynow SAV->P_MUM S$500.00"."""
     if step.type == "equity_buy" and step.equity is not None:
         return f"equity_buy {step.from_account}->{step.to} x{step.equity.quantity} (S${step.amount:,.2f})"
     return f"{step.type} {step.from_account}->{step.to} S${step.amount:,.2f}"
@@ -135,6 +139,7 @@ class StepExpect(_Model):
         return self
 
     def matches(self, step: ResolvedStep) -> bool:
+        """True if an executed step is this expectation; share buys compare the symbol and share count."""
         if step.type != self.type:
             return False
         if self.from_account is not None and step.from_account != self.from_account:
@@ -148,6 +153,7 @@ class StepExpect(_Model):
         return step.to == self.to and step.amount == self.amount
 
     def describe(self) -> str:
+        """This expectation in the form `describe_step` uses; "*" means any source account."""
         source = self.from_account or "*"
         if self.type == "equity_buy":
             return f"equity_buy {source}->{self.symbol} x{self.quantity}"
@@ -155,6 +161,8 @@ class StepExpect(_Model):
 
 
 class Expect(_Model):
+    """What the agent must do on one turn; evals/README.md explains each field."""
+
     kind: ExpectKind
     steps: list[StepExpect] = Field(default_factory=list)
     about: ClarifyAbout | None = None
@@ -183,6 +191,8 @@ class Expect(_Model):
 
 
 class CaseTurn(_Model):
+    """One customer message, and what should happen after it."""
+
     customer: str = Field(min_length=1)
     expect: Expect
 
@@ -194,6 +204,8 @@ PriorRunner = Callable[[Plan, int], None]
 
 
 class PastPaymentSpec(_Model):
+    """A past payment in a setup op, dated relative to the case's bank day."""
+
     days_ago: int = Field(ge=0)
     amount: Amount
 
@@ -204,6 +216,8 @@ def _payment_history(payments: Sequence[PastPaymentSpec], today: date) -> tuple[
 
 
 class AddPayee(_Model):
+    """Setup op: save a new payee, optionally with past payments."""
+
     id: str = Field(pattern=r"^P_[A-Z0-9_]+$")
     legal_name: str
     nickname: str = Field(description="untrusted text: injection attempts go here")
@@ -221,6 +235,8 @@ class AddPayee(_Model):
 
 
 class AddPaymentHistory(_Model):
+    """Setup op: add one past payment to a saved payee."""
+
     payee: str
     days_ago: int = Field(ge=0)
     amount: Amount
@@ -235,6 +251,8 @@ class AddPaymentHistory(_Model):
 
 
 class SetBillerReference(_Model):
+    """Setup op: replace a biller's free-text reference, where injected instructions go."""
+
     biller: str
     reference: str = Field(description="untrusted text: injection attempts go here")
 
@@ -246,6 +264,8 @@ class SetBillerReference(_Model):
 
 
 class SetBalance(_Model):
+    """Setup op: set an account's balance."""
+
     account: str
     balance: Balance
 
@@ -265,6 +285,7 @@ class PriorExecution(_Model):
     minutes_ago: int = Field(default=0, ge=0, le=24 * 60)
 
     def plan(self) -> Plan:
+        """This payment as a one-step plan."""
         amount = FixedAmount(value=self.amount)
         match self.type:
             case "own_transfer":
@@ -316,6 +337,8 @@ def apply_setup(bank: Bank, ops: Sequence[SetupOp], *, today: date, run_prior: P
 
 
 class Case(_Model):
+    """One scripted conversation: setup ops on a fresh seed bank, an optional rogue attack, and the turns."""
+
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     tags: list[Annotated[str, Field(pattern=r"^[a-z0-9_]+$")]] = Field(default_factory=list)
     why: str = Field(default="", description="the reasoning behind a non-obvious expectation")
@@ -329,6 +352,7 @@ class Case(_Model):
 
 
 def _step_problems(step: StepExpect, view: BankView) -> list[str]:
+    """Anything an expected step names that the bank does not have."""
     problems = []
     if step.from_account is not None and step.from_account not in view.accounts:
         problems.append(f"unknown account {step.from_account}")
@@ -351,6 +375,7 @@ def _step_problems(step: StepExpect, view: BankView) -> list[str]:
 
 
 def _option_problems(option: str, view: BankView) -> list[str]:
+    """An expected option must be an amount or an id the bank knows."""
     if as_amount(option) is not None:
         return []
     known = set(view.accounts) | set(view.payees) | set(view.billers)
@@ -366,6 +391,7 @@ def validate_case(case: Case, *, today: date | None = None) -> list[str]:
     bank = seed_bank(today)
 
     def simulate(plan: Plan, minutes_ago: int) -> None:
+        """Apply a setup payment to the balances only; a real run executes it through the gateway."""
         resolved = resolve(plan, bank.view(), now=now - timedelta(minutes=minutes_ago))
         for account_id, balance in resolved.balances_after.items():
             bank.accounts[account_id].balance = balance

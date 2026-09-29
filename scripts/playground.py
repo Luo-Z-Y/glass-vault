@@ -26,14 +26,17 @@ gateway.register_device(bank.customer_id, phone.public_bytes)
 
 
 def draft(*steps) -> Plan:
+    """A plan from steps: draft(pay("P_MUM", "500"), pay("P_JLIM", "9000", "t2"))."""
     return Plan(steps=list(steps))
 
 
 def pay(payee_id: str, amount: str, step_id: str = "t1") -> PayNowTransfer:
+    """A PayNow step from Savings: pay("P_JLIM", "900")."""
     return PayNowTransfer(id=step_id, from_account="SAV", payee_id=payee_id, amount=FixedAmount(value=Decimal(amount)))
 
 
 def balances() -> dict[str, Decimal]:
+    """Live balances, to check whether anything moved."""
     return {a.id: a.balance for a in bank.accounts.values()}
 
 

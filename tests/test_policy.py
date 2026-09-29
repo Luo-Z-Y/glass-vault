@@ -1,3 +1,5 @@
+"""The risk rules, one rule and its boundaries at a time, including attempts to dodge a limit by splitting."""
+
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
