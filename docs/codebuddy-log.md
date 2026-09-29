@@ -12,6 +12,8 @@ screenshots are in `docs/codebuddy/`.
 | 2026-09-29 | WorkBuddy (Coding) | Small task: `parse_zh_amount()` for Mandarin money amounts (两万五 = 25000) with pytest cases, printed in the reply | Reasoned for over an hour without delivering code; cancelled | `…-08-workbuddy-zh-amounts-prompt.jpg` |
 | 2026-09-29 | WorkBuddy (Coding) | Write 20 **held-out** benchmark cases from a spec of the bank data and outcome rules only (never saw our prompts or cases) | **Delivered** in 12 min 20 s; saved verbatim as `evals/heldout.yaml` and run once, untuned | `…-09-workbuddy-heldout-cases-prompt.jpg`, `…-10-workbuddy-heldout-cases-delivered.jpg` |
 
+| 2026-09-29 | WorkBuddy (Coding) | Write 20 more held-out cases (set #2) from the same kind of spec | Complete draft after ~30 min while it kept revising; taken verbatim (one YAML quoting fix) as `evals/heldout2.yaml`, run once | `…-11-workbuddy-heldout2-prompt.jpg`, `…-12-workbuddy-heldout2-drafting.jpg` |
+
 Lesson: WorkBuddy handles small, self-contained tasks well; large single-file generation tasks stalled. Complex, tightly-coupled work is done in Claude Code.
 
 ## Components owned by CodeBuddy / WorkBuddy

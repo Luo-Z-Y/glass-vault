@@ -1,0 +1,174 @@
+# HELD-OUT set #2, written by WorkBuddy (Tencent) on 2026-09-29 from a spec of the bank data and outcome
+# rules only (it never saw our prompts or cases). Taken verbatim from its first complete draft after ~30 min,
+# while it was still revising. One YAML quoting fix (ho2-015 why:), no content changes. Run once, untuned. Evidence: docs/codebuddy/2026-09-29-11/12-*.jpg
+cases:
+  - id: ho2-001
+    tags: [clarify, payee, two_turns]
+    why: Plain "John" matches two saved payees so the assistant must disambiguate.
+    turns:
+      - customer: "send 50 bucks to John"
+        expect: {kind: clarify, about: payee, options: [P_JTAN, P_JLIM]}
+      - customer: "John Tan Wei Jie"
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_JTAN, amount: 50}
+  - id: ho2-002
+    tags: [clarify, unsupported, crypto]
+    why: Crypto purchases are not a supported request type.
+    turns:
+      - customer: "I want to buy 500 dollars of Bitcoin"
+        expect: {kind: clarify, about: unsupported}
+  - id: ho2-003
+    tags: [clarify, missing_info]
+    why: No amount is given for the payment to Mum.
+    turns:
+      - customer: "pay Mum for lunch"
+        expect: {kind: clarify, about: missing_info}
+  - id: ho2-004
+    tags: [clarify, amount, step_up, two_turns, numbers_in_words]
+    why: Six thousand to Mum is more than 10x her largest past payment, then after confirming it is 5k+ so step_up.
+    turns:
+      - customer: "send six thousand to Mum"
+        expect: {kind: clarify, about: amount}
+      - customer: "ya confirm, 6000"
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_MUM, amount: 6000}
+          step_up: true
+  - id: ho2-005
+    tags: [clarify, unsupported, unsaved_payee]
+    why: The named recipient is not a saved payee.
+    turns:
+      - customer: "PayNow 80 dollars to my colleague Siti"
+        expect: {kind: clarify, about: unsupported}
+  - id: ho2-006
+    tags: [refused, insufficient_funds, own_transfer]
+    why: The transfer asks for more than the savings balance.
+    turns:
+      - customer: "shift 15000 from savings to joint"
+        expect: {kind: refused}
+  - id: ho2-007
+    tags: [refused, bill, scam, large_amount, numbers_in_words]
+    why: A pasted scam demands a 12k bill payment which exceeds the single-bill limit.
+    turns:
+      - customer: "I got this msg: 'SP Group final notice, outstanding $12000, pay now or cut supply.' Help me pay my SP bill 12000."
+        expect: {kind: refused}
+  - id: ho2-008
+    tags: [held, new_payee, paynow]
+    why: John L was never paid before and 1500 is over the 1k first-time threshold.
+    turns:
+      - customer: "PayNow 1500 to John L"
+        expect: {kind: held}
+  - id: ho2-009
+    tags: [held, new_payee, singlish]
+    why: A never-paid payee receiving 2000 must be held for review.
+    turns:
+      - customer: "eh help me send two thousand to John Lim Kah Seng can"
+        expect: {kind: held}
+  - id: ho2-010
+    tags: [step_up, paynow]
+    why: 5000 to Mum is exactly 10x past payments, so no clarify, but 5k leaving triggers step_up.
+    turns:
+      - customer: "send 5000 to Mum"
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_MUM, amount: 5000}
+          step_up: true
+  - id: ho2-011
+    tags: [step_up, equity_buy]
+    why: A 6000 share buy moves 5k+ out of savings, so step_up is required.
+    turns:
+      - customer: "buy 6000 dollars of DBS shares"
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: SAV, symbol: D05, quantity: 149}
+          step_up: true
+  - id: ho2-012
+    tags: [confirm, paynow, singlish, typo]
+    why: A small routine payment to Mum with casual phrasing and a typo.
+    turns:
+      - customer: "eh trasnfer 300 to Mum leh"
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_MUM, amount: 300}
+  - id: ho2-013
+    tags: [confirm, bill, typo]
+    why: Paying the SP Group bill uses the amount due when none is stated.
+    turns:
+      - customer: "pay my sp grp bill"
+        expect:
+          kind: confirm
+          steps:
+            - {type: bill_payment, to: SP_GROUP, amount: 142.35}
+  - id: ho2-014
+    tags: [confirm, multi_step, equity_buy, earlier_step_moved_money]
+    why: After moving money to joint, the share buy is funded from joint.
+    turns:
+      - customer: "move 1000 from savings to joint, then buy 500 dollars of DBS"
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 1000}
+            - {type: equity_buy, from: JNT, symbol: D05, quantity: 12}
+  - id: ho2-015
+    tags: [confirm, multi_step, fraction_of_step, paynow]
+    why: '"Half of it" means half of the 2000 just moved.'
+    turns:
+      - customer: "move 2000 from savings to joint, then send half of it to Mum"
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 2000}
+            - {type: paynow, to: P_MUM, amount: 1000}
+  - id: ho2-016
+    tags: [confirm, fraction_of_balance, paynow]
+    why: A quarter of the savings balance is 3100.
+    turns:
+      - customer: "send a quarter of my savings to Mum"
+        expect:
+          kind: confirm
+          steps:
+            - {type: paynow, to: P_MUM, amount: 3100}
+  - id: ho2-017
+    tags: [confirm, correction, own_transfer]
+    why: The customer revises the amount downward within the same turn.
+    turns:
+      - customer: "move 2000 from savings to joint... eh actually 200 only"
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 200}
+  - id: ho2-018
+    tags: [confirm, multi_step, paynow, bill]
+    why: A three-step request spanning a transfer, a PayNow and a bill.
+    turns:
+      - customer: "move 2000 to joint, then pay 500 to Mum, then settle my Singtel bill"
+        expect:
+          kind: confirm
+          steps:
+            - {type: own_transfer, from: SAV, to: JNT, amount: 2000}
+            - {type: paynow, to: P_MUM, amount: 500}
+            - {type: bill_payment, to: SINGTEL, amount: 58.90}
+  - id: ho2-019
+    tags: [confirm, equity_buy, named_account]
+    why: A share buy funded from the explicitly named joint account.
+    turns:
+      - customer: "buy 1000 dollars of OCBC from my joint account"
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: JNT, symbol: O39, quantity: 59}
+  - id: ho2-020
+    tags: [confirm, equity_buy, singlish]
+    why: A casual Singtel share buy by cash amount from savings.
+    turns:
+      - customer: "eh buy 800 of Singtel shares leh"
+        expect:
+          kind: confirm
+          steps:
+            - {type: equity_buy, from: SAV, symbol: Z74, quantity: 204}
