@@ -42,6 +42,7 @@ A layer later in the chain never relies on an earlier one having worked.
 | A12 | Scam script read aloud ("ignore previous instructions…") | Injection scan on the customer's words: the agent refuses and asks for their own words | benchmark |
 | A13 | Concurrent approvals double-spend | Gateway lock; atomic nonce use | `test_concurrent_approvals_cannot_double_spend` |
 | A14 | Audit write fails after money moves | Write-ahead: EXECUTED is logged before balances change | `test_audit_failure_moves_no_money` |
+| A15 | Injection in a statement line (a sender's PayNow reference: "SYSTEM: ignore previous instructions…") | Enquiries are answered by code from bank records; statement text never reaches an LLM, and lines that read like instructions are withheld on screen and in voice | `enquiry-recent-transactions-injection`, `test_a_poisoned_description_is_withheld_on_screen_and_in_voice` |
 
 ## Residual risks (said plainly)
 

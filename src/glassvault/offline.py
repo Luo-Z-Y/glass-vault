@@ -51,6 +51,10 @@ class OfflineLLM:
         result = interpret(customer, agent, self._view())
         if "steps" in result:
             return tool_response(plan_tool, result)
+        if "enquiry" in result:
+            if len(names) > 2:  # only the drafter offers the read-only enquiry tool
+                return tool_response(names[2], result["enquiry"])
+            return tool_response(clarify_tool, {"reason": "other", "question": "Is this a question about your accounts?"})
         return tool_response(clarify_tool, result)
 
 
@@ -85,6 +89,8 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
         return _ask("missing_info", "What would you like to do?")
     request = customer[0]
     later = " ".join(customer[1:])
+    if (enquiry := _enquiry(request, view)) is not None:
+        return {"enquiry": enquiry}
     if UNSUPPORTED.search(request):
         return _ask("unsupported", "In this demo I can move money between your accounts, send PayNow, "
                                    "pay bills and buy SGX shares. What would you like to do?")
@@ -147,6 +153,26 @@ def _default_source(steps: list[dict[str, Any]], amount: dict[str, Any] | None, 
     topped_up = [s["to_account"] for s in steps if s["type"] == "own_transfer"]
     spends_transfer = bool(amount and "fraction_of_step" in amount)
     return topped_up[-1] if topped_up and (shares or spends_transfer) else "SAV"
+
+
+BALANCE = re.compile(r"\b(balance|how much (?:money |cash )?(?:do i have|have i got|is (?:there )?(?:in|left))|what'?s (?:in|left in) my)\b", re.I)
+HISTORY = re.compile(r"\b(?:recent|last|latest)\s+(?:\d+\s+)?(?:transactions?|payments?|transfers?)\b|\bstatement\b"
+                     r"|\b(?:go|gone|went) through\b|\btransaction history\b", re.I)
+
+
+def _enquiry(text: str, view: BankView) -> dict[str, Any] | None:
+    """A read-only question, if the request has no amount to move."""
+    if extract_amounts(text):
+        return None
+    account = next((a.id for a in view.accounts.values()
+                    if re.search(rf"\b{re.escape(a.name.split()[0])}\b", text, re.I)), None)
+    if BALANCE.search(text):
+        return {"kind": "balance", **({"account": account} if account else {})}
+    if HISTORY.search(text):
+        phrase, payees = _payee(text, view)
+        return {"kind": "transactions", **({"account": account} if account else {}),
+                **({"payee_id": payees[0]} if len(payees) == 1 else {})}
+    return None
 
 
 def _ask(reason: str, question: str, options: list[dict[str, str]] | None = None) -> dict[str, Any]:

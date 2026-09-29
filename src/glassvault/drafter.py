@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import TypeAdapter, ValidationError
 
 from .llm import LLM, LLMError, LLMResponse
-from .schema import Clarification, ClarifyOption, Plan, Step, Turn
+from .schema import Clarification, ClarifyOption, Enquiry, Plan, Step, Turn
 
 if TYPE_CHECKING:
     from .bank import BankView
@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 
 PLAN_TOOL = "submit_plan"
 CLARIFY_TOOL = "ask_clarification"
+ENQUIRY_TOOL = "answer_enquiry"
+ENQUIRY_KINDS = ("balance", "transactions")
 MAX_STEPS = 6
 CENT = Decimal("0.01")
 
@@ -102,6 +104,7 @@ RESPOND WITH ONE TOOL CALL
 Always call exactly one tool, once. Never reply in plain text.
 - {PLAN_TOOL}: when every step is clear.
 - {CLARIFY_TOOL}: when anything is unclear, missing or unsupported. Do not submit part of a request; ask first, and draft the whole request once it is clear.
+- {ENQUIRY_TOOL}: when the customer only wants information: their balances ("how much is in my joint account?"), recent transactions, or whether a payment went through ("did my PayNow to mum go through?"). The bank answers from its own records, so never state a balance, amount or transaction yourself. If the same message also asks for a transaction, draft the transaction instead: its confirmation shows the new balances.
 The conversation may already contain your earlier questions and the customer's answers. Use all of it and draft the complete, latest version of the request. If the customer changed something ("actually make it 300"), use the change.
 
 {FIELD_CONVENTIONS}
@@ -228,19 +231,40 @@ class ToolSpec:
     plan_tool: str
     clarify_tool: str
     tools: tuple[dict[str, Any], ...]
+    enquiry_tool: str | None = None  # read-only questions; only the drafter offers it
+
+
+def _enquiry_definition() -> dict[str, Any]:
+    return {"type": "function", "function": {
+        "name": ENQUIRY_TOOL,
+        "description": "The customer only wants information: balances or recent transactions. "
+                       "The bank answers from its records; you never state numbers yourself.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": list(ENQUIRY_KINDS)},
+                "account": {"type": "string", "description": "account id, only if the customer named one"},
+                "payee_id": {"type": "string",
+                             "description": "transactions only: a saved payee the customer asked about"},
+                "limit": {"type": "integer", "description": "transactions only: how many, default 5, at most 10"},
+            },
+            "required": ["kind"],
+        },
+    }}
 
 
 DRAFTER_TOOLS = ToolSpec(
     PLAN_TOOL,
     CLARIFY_TOOL,
-    tuple(tool_definitions(
+    (*tool_definitions(
         PLAN_TOOL,
         "Submit the draft plan once every step the customer asked for is clear. "
         "The bank checks it and the customer confirms it; nothing moves without their passkey.",
         CLARIFY_TOOL,
         "Ask the customer one short question instead of guessing: which payee, which amount, "
         "a missing detail, or a request that is not supported.",
-    )),
+    ), _enquiry_definition()),
+    enquiry_tool=ENQUIRY_TOOL,
 )
 
 
@@ -643,6 +667,28 @@ def plan_to_tool_args(plan: Plan) -> dict[str, Any]:
 # --- Flat tool arguments -> Clarification --------------------------------------------------
 
 
+def enquiry_from_tool_args(args: Mapping[str, Any], catalog: Catalog | None = None) -> Enquiry:
+    """An `answer_enquiry` call as an Enquiry; ids are checked against BANK DATA."""
+    catalog = catalog or Catalog()
+    errors: list[str] = []
+    kind = str(args.get("kind", "")).strip().lower()
+    if kind not in ENQUIRY_KINDS:
+        errors.append(f"kind must be one of {', '.join(ENQUIRY_KINDS)}; got {_short(args.get('kind'))}")
+    account = str(args.get("account") or "").strip() or None
+    if account is not None:
+        account = _known(catalog, "accounts", account, "account", errors) or None
+    payee_id = str(args.get("payee_id") or "").strip() or None
+    if payee_id is not None:
+        payee_id = _known(catalog, "payees", payee_id, "payee_id", errors) or None
+    limit = _count(args.get("limit")) if args.get("limit") not in (None, "") else 5
+    if limit is None:
+        errors.append("limit must be a whole number from 1 to 10")
+    if errors:
+        raise PlanFormatError(errors)
+    return Enquiry(kind=kind, account=account, payee_id=payee_id if kind == "transactions" else None,
+                   limit=min(limit or 5, 10))
+
+
 def clarification_from_tool_args(args: Mapping[str, Any], catalog: Catalog | None = None) -> Clarification:
     """Convert a clarification call. Options naming bank records are relabelled from those records.
 
@@ -768,7 +814,7 @@ def drafter_messages(dialogue: Sequence[Turn], context: AgentContext) -> list[di
 class DraftRun:
     """The outcome plus every raw model response, for the audit trail and the console."""
 
-    result: Plan | Clarification
+    result: Plan | Clarification | Enquiry
     responses: tuple[LLMResponse, ...]
 
     @property
@@ -802,8 +848,8 @@ def run_tools(messages: list[dict[str, Any]], llm: LLM, spec: ToolSpec, catalog:
 
 def _interpret(
     response: LLMResponse, spec: ToolSpec, catalog: Catalog
-) -> tuple[Plan | Clarification | None, list[str]]:
-    """The Plan or Clarification in one response, or None and the errors to show the model."""
+) -> tuple[Plan | Clarification | Enquiry | None, list[str]]:
+    """The Plan, Clarification or Enquiry in one response, or None and the errors to show the model."""
     calls = response.tool_calls
     if not calls:
         return None, [f"you replied in text; call exactly one tool: {spec.plan_tool} or {spec.clarify_tool}"]
@@ -817,6 +863,18 @@ def _interpret(
                 return clarification_from_tool_args(call.arguments, catalog), []
             except PlanFormatError as e:
                 return None, list(e.errors)
+
+    enquiries = [c for c in calls if spec.enquiry_tool and c.name == spec.enquiry_tool]
+    if enquiries and len(enquiries) == len(calls):
+        call = enquiries[0]
+        if call.parse_error:
+            return None, [call.parse_error]
+        try:
+            return enquiry_from_tool_args(call.arguments, catalog), []
+        except PlanFormatError as e:
+            return None, list(e.errors)
+    # A transaction wins over a question in the same reply: its confirmation shows the new balances.
+    calls = tuple(c for c in calls if c not in enquiries)
 
     unknown = sorted({c.name for c in calls if c.name != spec.plan_tool})
     if unknown:
@@ -869,8 +927,8 @@ def draft_run(dialogue: Sequence[Turn], context: AgentContext, llm: LLM) -> Draf
     return run_tools(drafter_messages(dialogue, context), llm, DRAFTER_TOOLS, catalog)
 
 
-def draft(dialogue: Sequence[Turn], context: AgentContext, llm: LLM) -> Plan | Clarification:
-    """Draft a Plan from the dialogue, or return the question to ask the customer.
+def draft(dialogue: Sequence[Turn], context: AgentContext, llm: LLM) -> Plan | Clarification | Enquiry:
+    """Draft a Plan from the dialogue, return the question to ask, or the customer's read-only enquiry.
 
     Raises DraftError if the model's output is unusable even after one repair round.
     """

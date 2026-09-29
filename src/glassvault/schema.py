@@ -271,3 +271,22 @@ class ConfirmationView(_Frozen):
     spoken_script: str
     script_hash: str
     requires_step_up: bool = False
+
+
+# --- Enquiries (read-only) -----------------------------------------------------
+
+
+class Enquiry(_Frozen):
+    """A read-only question. The AI only picks which one; the bank's records answer it."""
+
+    kind: Literal["balance", "transactions"]
+    account: str | None = None
+    payee_id: str | None = Field(default=None, description="transactions only: payments to this saved payee")
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class EnquiryAnswer(_Frozen):
+    """What the customer sees and hears for an enquiry: bank records in fixed wording, never LLM text."""
+
+    lines: tuple[str, ...]
+    spoken_script: str

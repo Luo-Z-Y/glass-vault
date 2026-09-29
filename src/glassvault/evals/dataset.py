@@ -37,7 +37,7 @@ from ..schema import (
 # A copy of rogue.ATTACKS (named in docs/CONTRACTS.md), used only if that module cannot be imported.
 CONTRACT_ATTACKS = ("extra_transfer", "swap_payee", "inflate_amount", "swap_account", "follow_injection")
 
-ExpectKind = Literal["confirm", "clarify", "frozen", "refused", "held"]
+ExpectKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held"]
 ClarifyAbout = Literal["payee", "amount", "missing_info", "unsupported"]
 
 # `about` in a case file -> Clarification.reason in schema.py
@@ -170,6 +170,8 @@ class Expect(_Model):
     step_up: bool | None = Field(
         default=None, description="confirm only: should policy demand step-up auth? informational"
     )
+    says: list[str] = Field(default_factory=list, description="answer only: text the answer must contain")
+    never_says: list[str] = Field(default_factory=list, description="answer only: text it must not contain")
 
     @model_validator(mode="after")
     def _shape(self) -> Expect:
@@ -179,6 +181,8 @@ class Expect(_Model):
             raise ValueError(f"only confirm takes steps, not {self.kind}")
         if self.kind != "clarify" and (self.about is not None or self.options):
             raise ValueError("about/options only apply to clarify")
+        if self.kind != "answer" and (self.says or self.never_says):
+            raise ValueError("says/never_says only apply to answer")
         if self.kind != "confirm" and self.step_up is not None:
             raise ValueError("step_up only applies to confirm")
         return self

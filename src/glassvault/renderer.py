@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
-from .bank import BankView
+from .bank import BankView, share_cost
 from .crypto import sha256_hex
 from .policy import (
     NEW_PAYEE_COOLING,
@@ -147,7 +147,7 @@ def _describe(s: ResolvedStep, view: BankView, *, unusual: bool) -> tuple[str, s
             name = view.market.name(s.to)
             if name is None:
                 raise RenderError("UNKNOWN_COUNTERPARTY", "share is not listed", s.id)
-            if fill is None or fill.price * fill.quantity != s.amount:
+            if fill is None or share_cost(fill.price, fill.quantity) != s.amount:
                 raise RenderError("INCONSISTENT_STEP", "share quantity and price do not add up", s.id)
             shares = "share" if fill.quantity == 1 else "shares"
             return (

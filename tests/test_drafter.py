@@ -12,6 +12,7 @@ import pytest
 from glassvault.bank import BankView
 from glassvault.drafter import (
     CLARIFY_TOOL,
+    ENQUIRY_TOOL,
     DRAFTER_SYSTEM_PROMPT,
     DRAFTER_TOOLS,
     PLAN_TOOL,
@@ -141,7 +142,7 @@ def test_request_shape(context):
 
     (call,) = llm.calls
     assert call.temperature == 0.0 and call.tool_choice == "required"
-    assert [t["function"]["name"] for t in call.tools] == [PLAN_TOOL, CLARIFY_TOOL]
+    assert [t["function"]["name"] for t in call.tools] == [PLAN_TOOL, CLARIFY_TOOL, ENQUIRY_TOOL]
     system, user = call.messages
     assert system["role"] == "system" and system["content"].startswith(DRAFTER_SYSTEM_PROMPT)
     assert "<bank_data>" in system["content"] and '"P_JLIM"' in system["content"]
