@@ -13,10 +13,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 StepId = Annotated[str, Field(pattern=r"^t[1-9][0-9]?$")]
 Money = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
+Balance = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=2)]
 
 
 class _Frozen(BaseModel):
@@ -112,9 +113,9 @@ class Plan(_Frozen):
 class EquityFill(_Frozen):
     symbol: str
     quote_id: str
-    price: Decimal
-    quantity: int = Field(ge=1)
-    quote_expires_at: datetime
+    price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=4)]
+    quantity: int = Field(ge=1, le=10_000_000)
+    quote_expires_at: AwareDatetime
 
 
 class ResolvedStep(_Frozen):
@@ -123,14 +124,29 @@ class ResolvedStep(_Frozen):
     from_account: str
     to: str = Field(description="account id, payee id, biller id or symbol")
     to_display: str = Field(description="name from the bank's own records, never from the LLM")
-    amount: Decimal = Field(description="cash leaving from_account, 2 d.p.")
+    amount: Money = Field(description="cash leaving from_account, 2 d.p.")
     equity: EquityFill | None = None
+
+    @model_validator(mode="after")
+    def _equity_iff_share_buy(self) -> ResolvedStep:
+        if (self.type == "equity_buy") != (self.equity is not None):
+            raise ValueError("equity fill must be present exactly for equity_buy steps")
+        if self.equity is not None and self.equity.symbol != self.to:
+            raise ValueError("equity fill symbol must match the step destination")
+        return self
 
 
 class ResolvedPlan(_Frozen):
     customer_id: str
-    steps: tuple[ResolvedStep, ...]
-    balances_after: dict[str, Decimal]
+    steps: tuple[ResolvedStep, ...] = Field(min_length=1, max_length=6)
+    balances_after: dict[str, Balance]
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> ResolvedPlan:
+        ids = [s.id for s in self.steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("step ids must be unique")
+        return self
 
 
 class Challenge(_Frozen):
@@ -139,4 +155,55 @@ class Challenge(_Frozen):
     nonce: str
     plan_hash: str
     customer_id: str
-    expires_at: datetime
+    expires_at: AwareDatetime
+    script_hash: str | None = Field(
+        default=None, description="sha256 of the confirmation script the customer saw/heard"
+    )
+    policy_decision_id: str | None = None
+
+
+# --- Conversation ------------------------------------------------------------
+
+
+class Turn(_Frozen):
+    role: Literal["customer", "agent"]
+    text: str
+
+
+class ClarifyOption(_Frozen):
+    label: str = Field(description="rendered from bank records")
+    value: str = Field(description="e.g. a payee id or an amount")
+
+
+class Clarification(_Frozen):
+    """The agent asks instead of guessing."""
+
+    reason: Literal[
+        "ambiguous_payee", "ambiguous_amount", "missing_info", "unsupported", "other"
+    ]
+    question: str
+    options: tuple[ClarifyOption, ...] = ()
+
+
+# --- Policy and confirmation -------------------------------------------------
+
+
+class PolicyReason(_Frozen):
+    code: str = Field(description="e.g. STEP_UP_AMOUNT, NEW_PAYEE_LIMIT, VELOCITY")
+    step_id: str | None = None
+    message: str
+
+
+class PolicyDecision(_Frozen):
+    id: str = Field(description="sha256 over the plan hash and the reasons")
+    outcome: Literal["allow", "step_up", "hold", "deny"]
+    reasons: tuple[PolicyReason, ...] = ()
+
+
+class ConfirmationView(_Frozen):
+    """What the customer sees and hears before signing; never LLM-written."""
+
+    lines: tuple[str, ...]
+    spoken_script: str
+    script_hash: str
+    requires_step_up: bool = False

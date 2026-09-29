@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "glassvault-demo",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "glassvault.web.server"],
+      "port": 8000
+    }
+  ]
+}

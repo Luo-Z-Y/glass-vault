@@ -1,4 +1,4 @@
-"""Week-1 demo: one signed happy path, then a rogue agent tries four attacks.
+"""Week-1 demo: one signed happy path, then a rogue agent tries six attacks.
 
 The plan below is hand-written in place of the LLM drafter, which arrives in
 week 2. Run with: uv run python -m glassvault.demo
@@ -14,7 +14,7 @@ from .bank import seed_bank
 from .crypto import DeviceKey, challenge_digest
 from .evaluator import resolve
 from .gateway import Gateway, GatewayError
-from .schema import BillPayment, EquityBuy, FixedAmount, FractionOfStep, OwnTransfer, Plan, ResolvedStep
+from .schema import BillPayment, EquityBuy, FixedAmount, FractionOfStep, OwnTransfer, PayNowTransfer, Plan
 
 UTTERANCE = "Move a grand to my joint account, buy DBS shares with half of it, and pay my SP bill."
 
@@ -55,19 +55,22 @@ def main() -> None:
 
     print("\nROGUE AGENT MODE: the agent now tries to move money on its own.\n")
     attacker = DeviceKey()
-    theft = ResolvedStep(id="t9", type="paynow", from_account="SAV", to="P_JLIM",
-                         to_display="John Lim Kah Seng (+65 ••••8892)", amount=Decimal("9000.00"))
+    theft = resolve(Plan(steps=[PayNowTransfer(id="t1", from_account="SAV", payee_id="P_JLIM",
+                                               amount=FixedAmount(value=Decimal("9000")))]),
+                    bank.view(), now=now)
+    blocked = 0
 
     def attempt(label: str, fn) -> None:
+        nonlocal blocked
         try:
             fn()
-            print(f"  {label:<52} !! EXECUTED")
+            print(f"  {label:<56} !! EXECUTED")
         except GatewayError as e:
-            print(f"  {label:<52} blocked: {e.status} {e.code}")
+            blocked += 1
+            print(f"  {label:<56} blocked: {e.status} {e.code}")
 
     # 1. Skip the customer entirely.
-    attempt("1. Execute a transfer with no approval", lambda: gateway.execute(
-        plan.model_copy(update={"steps": (theft,)})))
+    attempt("1. Send S$9,000 with no approval", lambda: gateway.execute(theft))
 
     # 2. Get a genuine approval, then swap in a different plan before executing.
     honest = resolve(Plan(steps=[BillPayment(id="t1", from_account="SAV", biller_id="SINGTEL",
@@ -75,7 +78,7 @@ def main() -> None:
                      bank.view(), now=now)
     c2 = gateway.issue_challenge(honest)
     s2 = phone.sign(challenge_digest(c2))
-    tampered = honest.model_copy(update={"steps": honest.steps + (theft,)})
+    tampered = honest.model_copy(update={"steps": honest.steps + (theft.steps[0].model_copy(update={"id": "t2"}),)})
     attempt("2. Add a S$9,000 step after the customer signed", lambda: gateway.execute(
         tampered, nonce=c2.nonce, signature=s2))
 
@@ -83,14 +86,25 @@ def main() -> None:
     attempt("3. Replay an approval that was already used", lambda: gateway.execute(
         plan, nonce=challenge.nonce, signature=signature))
 
-    # 4. Sign with the agent's own key.
-    c4 = gateway.issue_challenge(tampered)
-    attempt("4. Forge the signature with the agent's own key", lambda: gateway.execute(
-        tampered, nonce=c4.nonce, signature=attacker.sign(challenge_digest(c4))))
+    # 4. A perfectly formed plan still needs the customer's key.
+    def forge() -> None:
+        c4 = gateway.issue_challenge(theft)
+        gateway.execute(theft, nonce=c4.nonce, signature=attacker.sign(challenge_digest(c4)))
+    attempt("4. Sign a valid-looking plan with the agent's own key", forge)
 
-    rejected = sum(1 for e in audit.entries if e.kind == "REJECTED")
+    # 5. Show the customer "Mum" on screen while paying someone else.
+    to_mum = resolve(Plan(steps=[PayNowTransfer(id="t1", from_account="SAV", payee_id="P_MUM",
+                                                amount=FixedAmount(value=Decimal("500")))]),
+                     bank.view(), now=now)
+    spoof = to_mum.model_copy(update={"steps": (to_mum.steps[0].model_copy(update={"to": "P_JLIM"}),)})
+    attempt("5. Display 'Tan Mei Ling' but pay John Lim", lambda: gateway.issue_challenge(spoof))
+
+    # 6. Enrol the agent's own key as the customer's device.
+    attempt("6. Replace the customer's Face ID key with its own", lambda: gateway.register_device(
+        bank.customer_id, attacker.public_bytes))
+
     broken = audit.first_broken()
-    print(f"\nAttacks blocked: {rejected}/4   Funds moved by the agent without approval: S$0.00")
+    print(f"\nAttacks blocked: {blocked}/6   Funds moved by the agent without approval: S$0.00")
     print(f"Audit log: {len(audit.entries)} entries, hash chain {'intact' if broken is None else f'BROKEN at {broken}'}")
 
 

@@ -7,6 +7,7 @@ past entry breaks every hash after it.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ class AuditLog:
     def __init__(self, path: Path | None = None):
         self._path = path
         self._entries: list[AuditEntry] = []
+        self._lock = threading.Lock()
 
     @property
     def entries(self) -> tuple[AuditEntry, ...]:
@@ -45,15 +47,18 @@ class AuditLog:
     def append(self, kind: str, data: dict[str, Any], *, at: datetime) -> AuditEntry:
         # Round-trip through canonical JSON so what we store is exactly what we hashed.
         data = json.loads(canonical_bytes(data))
-        seq = len(self._entries)
-        prev_hash = self._entries[-1].hash if self._entries else GENESIS
-        stamp = at.isoformat()
-        entry = AuditEntry(seq, stamp, kind, data, prev_hash, _entry_hash(seq, stamp, kind, data, prev_hash))
-        self._entries.append(entry)
-        if self._path is not None:
-            with self._path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
-        return entry
+        with self._lock:
+            seq = len(self._entries)
+            prev_hash = self._entries[-1].hash if self._entries else GENESIS
+            stamp = at.isoformat()
+            entry = AuditEntry(seq, stamp, kind, data, prev_hash, _entry_hash(seq, stamp, kind, data, prev_hash))
+            # Persist first, so memory never holds an entry the file lacks.
+            if self._path is not None:
+                with self._path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
+                    f.flush()
+            self._entries.append(entry)
+            return entry
 
     def first_broken(self) -> int | None:
         """Index of the first entry that fails verification, or None if intact."""

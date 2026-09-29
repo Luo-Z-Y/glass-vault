@@ -26,24 +26,38 @@ gateway for a challenge. It has no credential that moves money.
 | I4 | An approval executes at most once, and only before it expires. | nonce set, challenge TTL | done |
 | I5 | All money arithmetic is deterministic code in `Decimal`; the LLM never computes an amount. | `evaluator.py` | done |
 | I6 | Execution is all-or-nothing, and re-checked against live balances and quotes. | `Gateway._simulate` | done |
-| I7 | What the customer sees and hears is rendered from bank records, never from LLM text. | `ResolvedStep.to_display` from bank data | done (renderer: week 2) |
+| I7 | What the customer sees and hears is rendered from bank records, never from LLM text. | `evaluator.destination_label`; the gateway re-renders every label and refuses a mismatch before issuing a challenge | done (renderer: week 2) |
 | I8 | Untrusted text (bill references, nicknames) never reaches an LLM prompt verbatim. | quarantine step | week 2 |
 | I9 | The validator never sees the draft it checks. | blind validator | week 2 |
-| I10 | Every approval, execution and rejection is in a tamper-evident log. | `AuditLog` hash chain | done |
+| I10 | Every approval, execution and rejection is in a tamper-evident log, written before money moves. | `AuditLog` hash chain; write-ahead in `Gateway._execute`; catch-all rejection audit | done |
+| I11 | Device enrolment is write-once; the agent cannot swap in its own key. | `Gateway.register_device` | done |
+| I12 | The gateway executes its own validated copy of the plan, never the caller's object, and only one execution runs at a time. | `_Pending` store, strict re-parse, gateway lock | done |
+| I13 | Time comes from the gateway: quote and approval expiry use the gateway clock. | `Market.bind_clock` | done |
 
 ## Gateway error codes
 
 | Code | HTTP | Attack it stops |
 |---|---|---|
+| `MALFORMED_PLAN` | 400 | sub-cent or NaN amounts, broken text, equity fields on the wrong step |
 | `SIGNATURE_REQUIRED` | 401 | agent executes without asking the customer |
 | `SIGNATURE_INVALID` | 401 | agent signs with its own key |
 | `PAYLOAD_HASH_MISMATCH` | 403 | plan edited after the customer approved it |
 | `UNKNOWN_CHALLENGE` | 404 | made-up approval |
 | `NONCE_CONSUMED` | 409 | replaying an old approval |
+| `DEVICE_ALREADY_REGISTERED` | 409 | agent enrolling its own key as the customer's device |
 | `QUOTE_EXPIRED` | 409 | executing a share buy at a stale price |
-| `STALE_PLAN` | 409 | plan no longer matches live accounts, payees or quotes |
+| `STALE_PLAN` | 409 | displayed destination differs from bank records ("show Mum, pay someone else"), or plan no longer matches live accounts, payees or quotes |
 | `CHALLENGE_EXPIRED` | 410 | using an approval after its window |
 | `INSUFFICIENT_FUNDS` | 422 | balances changed since approval |
+| `INTERNAL_ERROR` | 500 | anything unexpected; audited, and no money moves |
+
+## Adversarial review (29 Sep)
+
+An independent multi-agent review attacked the week-1 core and confirmed these,
+all now fixed with regression tests in `tests/test_security_regressions.py`:
+display spoofing (show one payee, pay another), device-key replacement,
+concurrent double-spend, sub-cent amounts, caller-controlled quote expiry,
+money moving before the audit write, and unaudited non-gateway errors.
 
 ## Known simplifications
 

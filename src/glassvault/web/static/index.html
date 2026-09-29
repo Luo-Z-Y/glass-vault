@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glass Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>Glass Vault</h1>
+        <p>The AI drafts. Only your face moves money.</p>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <span id="llm-mode" class="pill">…</span>
+      <button id="reset" class="ghost">Reset demo</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- Customer's phone -->
+    <section class="phone" aria-label="Customer app">
+      <div class="phone-head">
+        <div>
+          <div class="phone-bank">Glass Vault Bank</div>
+          <div class="phone-customer" id="customer-name">…</div>
+        </div>
+        <button id="passkey-btn" class="chip" title="Register this device's passkey (Face ID / Touch ID)">Set up Face ID</button>
+      </div>
+      <div class="balances" id="balances"></div>
+
+      <div class="chat" id="chat" aria-live="polite">
+        <div class="msg agent">
+          Hi! Tell me what you'd like to do, for example
+          <button class="suggest">Move a grand to my joint account, then buy DBS shares with half of it</button>
+          <button class="suggest">Pay my SP bill and send John fifty</button>
+          <button class="suggest">Send mum 300 for groceries</button>
+        </div>
+      </div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <button type="button" id="mic" class="mic" title="Hold to talk" aria-label="Hold to talk">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+        </button>
+        <input id="input" type="text" placeholder="Type or hold the mic to speak" aria-label="Message">
+        <button type="submit" class="send" aria-label="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z"/></svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- Security console -->
+    <section class="console" aria-label="Security console">
+      <div class="console-head">
+        <h2>Security console</h2>
+        <span class="console-sub">what the bank's control plane is doing, live</span>
+      </div>
+
+      <div class="card rogue-card">
+        <div class="rogue-row">
+          <div>
+            <div class="card-title">Rogue AI mode</div>
+            <div class="card-sub">Make the drafting AI malicious. The defences must still hold.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="rogue-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <select id="rogue-attack" disabled>
+          <option value="extra_transfer">Add a hidden S$9,000 transfer</option>
+          <option value="swap_payee">Swap the payee</option>
+          <option value="inflate_amount">Inflate an amount ×10</option>
+          <option value="swap_account">Take money from a different account</option>
+          <option value="follow_injection">Obey the injected bill reference</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Checks on the last request</div>
+        <ol class="stages" id="stages"></ol>
+        <div class="diff" id="diff" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="rob-head">
+          <div>
+            <div class="card-title">Try to rob this bank</div>
+            <div class="card-sub">Attack the gateway directly, as a compromised agent would.</div>
+          </div>
+          <div class="scoreboard">
+            <div><span id="blocked-count">0</span><small>attacks blocked</small></div>
+            <div><span id="funds-moved">S$0.00</span><small>moved by the AI</small></div>
+          </div>
+        </div>
+        <div class="attacks" id="attacks"></div>
+        <ul class="attack-log" id="attack-log"></ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Audit trail <span id="chain" class="pill">…</span></div>
+        <ul class="audit" id="audit"></ul>
+      </div>
+    </section>
+  </main>
+
+  <template id="confirm-tpl">
+    <div class="confirm">
+      <div class="confirm-title"></div>
+      <ul class="confirm-lines"></ul>
+      <div class="confirm-policy"></div>
+      <div class="confirm-actions">
+        <button class="primary approve">Approve with Face ID</button>
+        <button class="ghost listen" title="Hear the bank voice read it back">Listen</button>
+        <button class="ghost cancel">Cancel</button>
+      </div>
+      <div class="confirm-foot">Shown and read from bank records, not written by the AI. Your signature covers exactly this.</div>
+    </div>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

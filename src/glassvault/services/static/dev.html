@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gateway Dev Harness</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e2e1dc;
+    --warn-bg: #fff4d6; --warn-ink: #7a5200; --ok: #1f7a3d; --bad: #b3261e; --accent: #1f4fd1;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --card: #1f1f1d; --ink: #ecebe6; --muted: #a09f98; --line: #34332f;
+      --warn-bg: #3a2e0c; --warn-ink: #f2c65a; --ok: #6fd08f; --bad: #ff8a80; --accent: #8ab0ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  .banner { background: var(--warn-bg); color: var(--warn-ink); border-radius: 8px;
+            padding: 10px 14px; font-weight: 600; margin-bottom: 12px; }
+  .banner small { display: block; font-weight: 400; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 14px; margin: 12px 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+  input { flex: 1 1 220px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line);
+          border-radius: 6px; background: var(--bg); color: var(--ink); font: 14px var(--mono); }
+  button { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--accent); cursor: pointer;
+           background: var(--accent); color: var(--card); font-weight: 600; }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .mono { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .table-wrap { overflow-x: auto; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+        max-height: 260px; overflow: auto; font: 12px/1.4 var(--mono); white-space: pre-wrap;
+        overflow-wrap: anywhere; margin: 6px 0; }
+  ul.checks { list-style: none; padding: 0; margin: 6px 0; }
+  ul.checks li::before { content: attr(data-mark) " "; font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <div class="banner">DEV HARNESS: not the customer app
+    <small>Talks straight to the gateway API so passkey enrolment and approval can be tested before
+    the real UI exists. It never computes an amount: every figure below comes from the gateway.</small>
+  </div>
+  <h1>Glass Vault gateway</h1>
+  <div id="config" class="muted">Loading…</div>
+
+  <section>
+    <h2>1. Enrol a passkey</h2>
+    <p class="muted">The enrolment code is printed on the gateway's console (it stands in for bank
+    onboarding). Each code works once.</p>
+    <div class="row">
+      <input id="code" placeholder="enrolment code, e.g. 1a2b-3c4d-5e6f" autocomplete="off">
+      <button id="enrol">Create passkey</button>
+    </div>
+    <div id="enrol-status" class="muted"></div>
+    <div id="passkeys" class="mono"></div>
+  </section>
+
+  <section>
+    <h2>2. Approve a challenge</h2>
+    <p class="muted">Paste a nonce from <span class="mono">POST /challenges</span>, or create a sample one.</p>
+    <div class="row">
+      <input id="nonce" placeholder="nonce" autocomplete="off">
+      <button id="load" class="secondary">Load</button>
+      <button id="sample" class="secondary" hidden>New sample challenge</button>
+    </div>
+    <div id="pending" hidden>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Step</th><th>From</th><th>To (bank records)</th><th class="num">Amount</th></tr></thead>
+          <tbody id="steps"></tbody>
+        </table>
+      </div>
+      <p class="muted" id="after"></p>
+      <ul class="checks" id="checks"></ul>
+      <p class="muted mono" id="meta"></p>
+      <div class="row">
+        <button id="approve">Approve with passkey and execute</button>
+      </div>
+    </div>
+    <div id="result"></div>
+  </section>
+
+  <section>
+    <h2>3. Last approval</h2>
+    <p class="muted">The WebAuthn assertion that was sent. Replaying it should be refused.</p>
+    <pre id="assertion">(none yet)</pre>
+    <div class="row">
+      <button id="copy" class="secondary" disabled>Copy JSON</button>
+      <button id="replay" class="secondary" disabled>Replay it</button>
+    </div>
+    <div id="replay-result"></div>
+  </section>
+
+  <section>
+    <h2>4. Audit log</h2>
+    <div class="row"><button id="audit" class="secondary">Refresh</button><span id="chain"></span></div>
+    <div class="table-wrap"><table><tbody id="audit-rows"></tbody></table></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { challenge: null, plan: null, options: null, nonce: null, assertion: null };
+
+// --- encoding helpers ---------------------------------------------------------
+const b64u = {
+  enc(buf) {
+    let s = "";
+    for (const b of new Uint8Array(buf)) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  },
+  dec(str) {
+    const s = str.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(s + "=".repeat((4 - (s.length % 4)) % 4));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
+  },
+};
+
+// Same bytes as Python's crypto.canonical_bytes: sorted keys, no whitespace, UTF-8.
+function canonical(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+  return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(v[k])).join(",") + "}";
+}
+async function sha256(text) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+}
+const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+
+function creationOptions(o) {
+  return { ...o, challenge: b64u.dec(o.challenge), user: { ...o.user, id: b64u.dec(o.user.id) },
+           excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })) };
+}
+function requestOptions(o) {
+  return { ...o, challenge: b64u.dec(o.challenge),
+           allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })) };
+}
+function registrationJSON(c) {
+  return { id: c.id, rawId: b64u.enc(c.rawId), type: c.type,
+           authenticatorAttachment: c.authenticatorAttachment || null,
+           clientExtensionResults: c.getClientExtensionResults(),
+           response: { clientDataJSON: b64u.enc(c.response.clientDataJSON),
+                       attestationObject: b64u.enc(c.response.attestationObject),
+                       transports: c.response.getTransports ? c.response.getTransports() : [] } };
+}
+function assertionJSON(c) {
+  return { id: c.id, rawId: b64u.enc(c.rawId), type: c.type,
+           response: { clientDataJSON: b64u.enc(c.response.clientDataJSON),
+                       authenticatorData: b64u.enc(c.response.authenticatorData),
+                       signature: b64u.enc(c.response.signature),
+                       userHandle: c.response.userHandle ? b64u.enc(c.response.userHandle) : null } };
+}
+
+// --- API ----------------------------------------------------------------------
+async function api(path, body) {
+  const init = body === undefined ? {} :
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.message || res.statusText), { body: data, status: res.status });
+  return data;
+}
+
+function show(el, ok, text) {
+  el.replaceChildren();
+  const p = document.createElement("p");
+  p.className = ok ? "ok" : "bad";
+  p.textContent = text;
+  el.append(p);
+}
+function errorText(e) {
+  return e.body && e.body.code ? `${e.body.status} ${e.body.code}: ${e.body.message}` : String(e.message || e);
+}
+function cell(tr, text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  tr.append(td);
+}
+
+// --- config -------------------------------------------------------------------
+async function loadConfig() {
+  const h = await api("/health");
+  const warn = h.origins.includes(location.origin) ? "" :
+    ` | WARNING: this page's origin ${location.origin} is not trusted; open it via ${h.origins[0]}/dev`;
+  $("config").textContent =
+    `customer ${h.customer_id} | rp_id ${h.rp_id} | passkeys ${h.passkeys ? "on" : "off (device-key mode)"}${warn}`;
+  $("sample").hidden = !h.dev_tools;
+  if (!window.PublicKeyCredential) $("config").textContent += " | this browser has no WebAuthn";
+  if (h.passkeys) await loadPasskeys();
+}
+async function loadPasskeys() {
+  const { passkeys } = await api("/webauthn/passkeys");
+  $("passkeys").textContent = passkeys.length === 0 ? "No passkey enrolled yet." :
+    passkeys.map((p) => `• ${p.credential_id.slice(0, 16)}…  counter ${p.sign_count}` +
+                        (p.backed_up ? "  (synced passkey)" : "  (device-bound)")).join("\n");
+  $("passkeys").style.whiteSpace = "pre-line";
+}
+
+// --- 1. enrol -----------------------------------------------------------------
+$("enrol").onclick = async () => {
+  const code = $("code").value.trim();
+  try {
+    const { webauthn_options } = await api("/webauthn/register/options", { enrolment_code: code });
+    const cred = await navigator.credentials.create({ publicKey: creationOptions(webauthn_options) });
+    const { passkey } = await api("/webauthn/register/verify",
+                                  { enrolment_code: code, credential: registrationJSON(cred) });
+    show($("enrol-status"), true, `Enrolled ${passkey.credential_id.slice(0, 16)}…`);
+    $("code").value = "";
+    await loadPasskeys();
+  } catch (e) {
+    show($("enrol-status"), false, errorText(e));
+  }
+};
+
+// --- 2. approve ---------------------------------------------------------------
+async function showPending(body) {
+  Object.assign(state, { challenge: body.challenge, plan: body.plan, options: body.webauthn_options,
+                         nonce: body.challenge.nonce });
+  $("nonce").value = state.nonce;
+  const rows = $("steps");
+  rows.replaceChildren();
+  for (const s of body.plan.steps) {
+    const tr = document.createElement("tr");
+    cell(tr, s.id); cell(tr, s.from_account); cell(tr, s.to_display); cell(tr, `S$${s.amount}`, "num");
+    rows.append(tr);
+  }
+  $("after").textContent = "Balances after: " +
+    Object.entries(body.plan.balances_after).map(([k, v]) => `${k} S$${v}`).join(", ");
+
+  // The device does not trust the server: it recomputes what it is about to sign.
+  const planHash = hex(await sha256(canonical(body.plan)));
+  const digest = b64u.enc(await sha256(canonical(body.challenge)));
+  const checks = [
+    [planHash === body.challenge.plan_hash, "plan shown here hashes to the challenge's plan_hash"],
+    [digest === body.webauthn_options.challenge, "passkey will sign SHA-256 of exactly this challenge"],
+    [body.webauthn_options.userVerification === "required", "biometric / PIN verification required"],
+  ];
+  const list = $("checks");
+  list.replaceChildren();
+  for (const [ok, text] of checks) {
+    const li = document.createElement("li");
+    li.dataset.mark = ok ? "✓" : "✗";
+    li.className = ok ? "ok" : "bad";
+    li.textContent = text;
+    list.append(li);
+  }
+  $("approve").disabled = !checks.every(([ok]) => ok);
+  const c = body.challenge;
+  $("meta").textContent = `nonce ${c.nonce} | expires ${c.expires_at}` +
+    (c.script_hash ? ` | script ${c.script_hash.slice(0, 12)}…` : "") +
+    (c.policy_decision_id ? ` | policy ${c.policy_decision_id}` : "");
+  $("pending").hidden = false;
+  $("result").replaceChildren();
+}
+
+$("load").onclick = async () => {
+  try {
+    await showPending(await api("/webauthn/approve/options", { nonce: $("nonce").value.trim() }));
+  } catch (e) {
+    $("pending").hidden = true;
+    show($("result"), false, errorText(e));
+  }
+};
+$("sample").onclick = async () => {
+  try { await showPending(await api("/dev/sample-challenge", {})); }
+  catch (e) { show($("result"), false, errorText(e)); }
+};
+
+async function execute(assertion) {
+  return api("/execute", { nonce: state.nonce, plan: state.plan, assertion });
+}
+$("approve").onclick = async () => {
+  try {
+    const cred = await navigator.credentials.get({ publicKey: requestOptions(state.options) });
+    state.assertion = assertionJSON(cred);
+    $("assertion").textContent = JSON.stringify(state.assertion, null, 2);
+    $("copy").disabled = $("replay").disabled = false;
+    const { receipts } = await execute(state.assertion);
+    show($("result"), true, "Executed: " + receipts.map((r) => `${r.reference} ${r.summary}`).join(" · "));
+    $("approve").disabled = true;
+    await loadPasskeys();
+  } catch (e) {
+    show($("result"), false, errorText(e));
+  }
+};
+
+// --- 3. replay ----------------------------------------------------------------
+$("copy").onclick = () => navigator.clipboard.writeText(JSON.stringify(state.assertion));
+$("replay").onclick = async () => {
+  try {
+    await execute(state.assertion);
+    show($("replay-result"), false, "Replay EXECUTED: this should never happen");
+  } catch (e) {
+    show($("replay-result"), true, "Refused as expected: " + errorText(e));
+  }
+};
+
+// --- 4. audit -----------------------------------------------------------------
+$("audit").onclick = async () => {
+  const log = await api("/audit");
+  $("chain").textContent = log.chain_intact ? "hash chain intact" : `chain BROKEN at entry ${log.first_broken}`;
+  $("chain").className = log.chain_intact ? "ok" : "bad";
+  const rows = $("audit-rows");
+  rows.replaceChildren();
+  for (const e of log.entries.slice(-15).reverse()) {
+    const tr = document.createElement("tr");
+    cell(tr, String(e.seq), "num");
+    cell(tr, e.kind);
+    cell(tr, String(e.data.code || e.data.reason || e.data.nonce || "").slice(0, 24), "mono");
+    cell(tr, e.hash.slice(0, 12) + "…", "mono");
+    rows.append(tr);
+  }
+};
+
+loadConfig().catch((e) => { $("config").textContent = "Gateway unreachable: " + errorText(e); });
+</script>
+</body>
+</html>
