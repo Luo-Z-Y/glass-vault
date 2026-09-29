@@ -80,7 +80,7 @@ AmountExpr = Annotated[Union[FixedAmount, FractionOfStep, FractionOfBalance], Fi
 class _Step(_Frozen):
     """What every draft step carries: its id, and the customer's words behind each field.
 
-    The provenance check refuses a draft whose evidence is not in the transcript.
+    The provenance check freezes a draft whose evidence is not something the customer said.
     """
 
     id: StepId

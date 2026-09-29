@@ -61,9 +61,9 @@ class AgentOutcome:
     """What the agent hands back for one customer turn.
 
     confirm: `plan` is ready for the customer to sign. clarify: the agent asks
-    `clarification`. frozen: the control plane found the draft is not what the
-    customer said. refused: policy or the bank said no. held: parked for
-    review. error: it broke.
+    `clarification`. answer: a read-only enquiry, shown as `answer_lines`.
+    frozen: the control plane found the draft is not what the customer said.
+    refused: policy or the bank said no. held: parked for review. error: it broke.
     """
 
     kind: OutcomeKind

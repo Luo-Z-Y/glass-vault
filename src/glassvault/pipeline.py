@@ -3,7 +3,8 @@
 Two zones, kept apart even while they share a process:
 
 - Agent zone (assume compromised): quarantined bank context -> LLM drafter ->
-  a Plan or a clarifying question.
+  a Plan, a clarifying question, or a read-only enquiry that code answers from
+  bank records.
 - Control plane: deterministic provenance checks, the evaluator's maths, a
   blind validator that re-derives the plan from the dialogue alone, risk rules,
   and the template confirmation the customer signs. Only the control plane asks
@@ -86,7 +87,9 @@ class TraceEvent:
 class Outcome:
     """The result of one customer turn; `kind` decides which other fields are set.
 
-    confirm: plan, confirmation, policy and challenge. clarify: clarification.
+    confirm: plan, confirmation, policy and challenge. clarify: clarification (and the
+    plan, when the validator is the one asking). answer: answer, read from bank records;
+    there is no plan or challenge.
     frozen, refused and held carry the plan if it got that far, and `trace` always
     ends with the stage that decided.
     """
@@ -293,7 +296,8 @@ class Pipeline:
         """Resolve the draft, turning an EvaluationError into the outcome the customer should get.
 
         Not enough money is refused and too little for one share is a question; any
-        other error means the draft named something that does not exist, so it is frozen.
+        other error (an unknown account, payee, biller, share or step, a transfer to the same
+        account, a zero amount) means the draft cannot be carried out as written, so it is frozen.
         """
         try:
             resolved = resolve(plan, view, now=now)
@@ -304,7 +308,7 @@ class Pipeline:
             if e.code == "NOTIONAL_TOO_SMALL":
                 raise _Stop("clarify", f"{e.message}. How much would you like to invest?",
                             clarification=Clarification(reason="ambiguous_amount", question=e.message)) from e
-            # Anything else means the draft named something that doesn't exist.
+            # Anything else means the draft cannot be carried out as written.
             raise _Stop("frozen", MSG_FROZEN) from e
         trace.append(TraceEvent(stage, True, f"amounts computed in code; balances checked step by step"))
         return resolved

@@ -262,7 +262,7 @@ class WebAuthnVerifier:
         return True
 
     def _check(self, customer_id: str, message: bytes, proof: Any) -> tuple[Passkey, int, bytes]:
-        """Every check on one assertion: (the passkey, its new counter, the signed bytes), or _Rejected."""
+        """Every check on one assertion: (the passkey, its new counter, a hash of the signed bytes), or _Rejected."""
         if not isinstance(proof, dict | str):
             raise _Rejected("MALFORMED_ASSERTION", f"expected assertion JSON, got {type(proof).__name__}")
         try:

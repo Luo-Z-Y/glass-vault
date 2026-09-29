@@ -1,8 +1,10 @@
 """Canonical hashing and device signatures.
 
 ``DeviceKey`` stands in for the customer's passkey (Face ID / Touch ID) in the
-CLI demo, the benchmark and the tests. The web demo and the gateway service use
-real WebAuthn passkeys (``services/webauthn_verifier.py``). The gateway's check
+CLI demo, the benchmark and the tests, and for the web demo's labelled
+"simulated phone" until a passkey is registered. The gateway service, and the web
+demo once a passkey is registered, use real WebAuthn passkeys
+(``services/webauthn_verifier.py``). The gateway's check
 has the same shape either way: a signature from the customer's registered key
 over the challenge digest.
 """

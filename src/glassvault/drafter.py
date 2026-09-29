@@ -1,4 +1,4 @@
-"""The drafter: dialogue in, a draft Plan or a clarifying question out.
+"""The drafter: dialogue in, a draft Plan, a clarifying question or a read-only Enquiry out.
 
 The LLM fills in a *form*; it never decides anything that moves money. It
 may only name ids it was shown, quote the customer's own words as evidence,
@@ -61,7 +61,7 @@ class DraftError(Exception):
 
 
 class PlanFormatError(ValueError):
-    """Tool-call arguments that do not convert to a Plan or a Clarification."""
+    """Tool-call arguments that do not convert to a Plan, a Clarification or an Enquiry."""
 
     def __init__(self, errors: Sequence[str]):
         super().__init__("; ".join(errors))
@@ -226,7 +226,10 @@ def tool_definitions(
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """The plan and clarify tools one role is offered; the drafter and the validator name theirs differently."""
+    """The tools one role is offered: plan and clarify, plus the read-only enquiry tool for the drafter only.
+
+    The drafter and the validator name theirs differently.
+    """
 
     plan_tool: str
     clarify_tool: str
@@ -429,7 +432,7 @@ def plan_from_tool_args(args: Mapping[str, Any], catalog: Catalog | None = None)
 
 
 def _step_from_flat(raw: Any, step_id: str, earlier: tuple[str, ...], catalog: Catalog) -> Any:
-    """One flat step as a typed Step. Every problem in the step is reported, not just the first."""
+    """One flat step as a typed Step. Once its type is known, every field problem is reported, not just the first."""
     if not isinstance(raw, Mapping):
         raise PlanFormatError([f"{step_id}: each step must be an object"])
     errors: list[str] = []
@@ -664,7 +667,7 @@ def plan_to_tool_args(plan: Plan) -> dict[str, Any]:
     return {"steps": steps}
 
 
-# --- Flat tool arguments -> Clarification --------------------------------------------------
+# --- Flat tool arguments -> Enquiry or Clarification ---------------------------------------
 
 
 def enquiry_from_tool_args(args: Mapping[str, Any], catalog: Catalog | None = None) -> Enquiry:

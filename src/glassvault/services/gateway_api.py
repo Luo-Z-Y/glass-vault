@@ -211,7 +211,11 @@ def snapshot_json(view: BankView) -> dict[str, Any]:
 
 
 def view_from_snapshot(data: Mapping[str, Any], market: Any) -> BankView:
-    """Rebuild a read-only ``BankView`` from a ``/view`` body; ``market`` supplies quotes."""
+    """Rebuild a read-only ``BankView`` from a ``/view`` body; ``market`` supplies quotes.
+
+    The snapshot has no statement, so ``transactions`` is empty: enquiries through a
+    remote gateway list only the payments it executed.
+    """
     accounts = {a["id"]: Account(a["id"], a["name"], Decimal(a["balance"])) for a in data["accounts"]}
     payees = {
         p["id"]: Payee(
@@ -480,7 +484,7 @@ def create_gateway_app(
 
     @app.get("/history")
     def history(since: AwareDatetime | None = None) -> dict[str, Any]:
-        """Executed steps, oldest first, optionally from `since`; the risk rules read these."""
+        """Executed steps, oldest first, optionally from `since`; the risk rules and transaction enquiries read these."""
         with lock:
             executions = gateway.history(since)
         return {

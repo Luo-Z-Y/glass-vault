@@ -78,7 +78,7 @@ class Receipt:
 
 @dataclass(frozen=True)
 class Execution:
-    """One executed step and when it ran; the risk rules read these for velocity and daily limits."""
+    """One executed step and when it ran; the risk rules read these for their limits, and enquiries list them."""
 
     at: datetime
     step: ResolvedStep
@@ -178,7 +178,7 @@ class Gateway:
         return self._clock()
 
     def history(self, since: datetime | None = None) -> tuple[Execution, ...]:
-        """Executed steps, oldest first (used by the risk rules for velocity checks)."""
+        """Executed steps, oldest first; read by the risk rules and by transaction enquiries."""
         with self._lock:
             return tuple(e for e in self._executions if since is None or e.at >= since)
 

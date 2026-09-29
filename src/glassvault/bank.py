@@ -1,4 +1,4 @@
-"""Mock DBS bank: accounts, payees, billers and a share market.
+"""Mock DBS bank: accounts, payees, billers, a share market and a recent statement.
 
 All data is fake. Only the gateway mutates a ``Bank``; the agent side works
 from a read-only ``BankView`` snapshot.
@@ -154,7 +154,7 @@ class BankView:
 
 @dataclass
 class Bank:
-    """The ledger itself. Only the gateway holds a Bank and changes it; everyone else gets `view()`."""
+    """The ledger itself. At run time only the gateway changes it; the agent side only ever gets `view()`."""
 
     customer_id: str
     customer_name: str

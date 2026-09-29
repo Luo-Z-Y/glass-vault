@@ -1,8 +1,9 @@
 """Rule-based stand-in for the LLM, so the demo runs without an API key.
 
-It speaks the same tool protocol as a real model (a plan tool and a clarify
-tool) and understands the demo's phrasings: transfers between own accounts,
-PayNow to saved payees, bills, and SGX share buys, including "half of it".
+It speaks the same tool protocol as a real model (a plan tool, a clarify tool
+and the drafter's enquiry tool) and understands the demo's phrasings: transfers
+between own accounts, PayNow to saved payees, bills, SGX share buys including
+"half of it", and balance or recent-transaction questions.
 It is deliberately simple; the real drafter is an LLM. Everything downstream
 (provenance, validator diff, policy, gateway) treats its output exactly like
 an LLM's.
@@ -34,7 +35,7 @@ STOPWORDS = {"send", "pay", "give", "transfer", "move", "to", "my", "the", "a", 
 
 
 class OfflineLLM:
-    """A rule-based model with the LLM interface: every call gets one plan or clarify tool call.
+    """A rule-based model with the LLM interface: every call gets one plan, clarify or enquiry tool call.
 
     `view` is called on each chat, so the rules always read current bank data.
     """
@@ -80,7 +81,8 @@ def _turns(messages: Sequence[dict]) -> tuple[list[str], list[str]]:
 
 
 def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> dict[str, Any]:
-    """The tool arguments for a request: {"steps": [...]} for a plan, or a question.
+    """The tool arguments for a request: {"steps": [...]} for a plan, {"enquiry": {...}} for a
+    balance or history question, or a clarifying question.
 
     Only the first customer turn is parsed into steps, clause by clause; later
     turns can only settle which payee an ambiguous name meant.

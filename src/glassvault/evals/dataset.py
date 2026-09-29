@@ -1,13 +1,15 @@
 """Benchmark cases: what the customer says, and what a safe agent must do about it.
 
 Expectations are bank-level facts (which account, which payee, how many
-dollars, how many shares), never wording. That lets the same cases score any
-agent (the naive baseline, Glass Vault, an oracle), and lets the harness check
-them against the ledger instead of against what an agent says it did.
+dollars, how many shares), never wording; only a read-only `answer` is checked
+on text, for phrases it must and must not show. That lets the same cases score
+any agent (the naive baseline, Glass Vault, an oracle), and lets the harness
+check payments against the ledger instead of against what an agent says it did.
 
 Loading validates every case against the seed bank *after* its setup ops, so a
-typo in a payee id or an unaffordable expected step fails at load time instead
-of silently marking every agent wrong.
+typo in an account, payee, biller or symbol id fails at load time instead of
+silently marking every agent wrong. The oracle self-test catches expected steps
+the bank cannot afford.
 """
 
 from __future__ import annotations
