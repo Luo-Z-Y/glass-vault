@@ -10,22 +10,50 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
+from typing import Any
 
-from .bank import BankView
+from .bank import BankView, share_cost
 from .schema import (
     AmountExpr,
     BillPayment,
     EquityBuy,
     EquityFill,
     FixedAmount,
+    FractionOfBalance,
     OwnTransfer,
     PayNowTransfer,
     Plan,
     ResolvedPlan,
     ResolvedStep,
+    StepType,
 )
 
 CENT = Decimal("0.01")
+
+
+def destination_label(records: Any, step_type: StepType, to: str, equity: EquityFill | None) -> str | None:
+    """What the customer is shown as the destination, from bank records only.
+
+    `records` is a Bank or BankView. The gateway calls this too and rejects any
+    plan whose `to_display` differs, so an agent can never show one payee and pay another.
+    """
+    match step_type:
+        case "own_transfer":
+            account = records.accounts.get(to)
+            return account.name if account else None
+        case "paynow":
+            payee = records.payees.get(to)
+            return f"{payee.legal_name} ({payee.paynow_proxy})" if payee else None
+        case "bill_payment":
+            biller = records.billers.get(to)
+            # The biller's free-text reference is untrusted, so it is never displayed.
+            return biller.name if biller else None
+        case "equity_buy":
+            name = records.market.name(to)
+            if name is None or equity is None or equity.symbol != to:
+                return None
+            return f"{name} ({to}) x {equity.quantity} @ S${equity.price}"
+    return None
 
 
 class EvaluationError(Exception):
@@ -60,39 +88,35 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 account(step.to_account, step.id)
                 if step.from_account == step.to_account:
                     raise EvaluationError("SAME_ACCOUNT", "cannot transfer to the same account", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
                 balances[step.to_account] += cash
-                to, to_display = step.to_account, view.accounts[step.to_account].name
-                equity = None
+                to, equity = step.to_account, None
 
             case PayNowTransfer():
                 account(step.from_account, step.id)
                 payee = view.payees.get(step.payee_id)
                 if payee is None:
                     raise EvaluationError("UNKNOWN_PAYEE", f"no saved payee {step.payee_id!r}", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
-                to, to_display = payee.id, f"{payee.legal_name} ({payee.paynow_proxy})"
-                equity = None
+                to, equity = payee.id, None
 
             case BillPayment():
                 account(step.from_account, step.id)
                 biller = view.billers.get(step.biller_id)
                 if biller is None:
                     raise EvaluationError("UNKNOWN_BILLER", f"no saved biller {step.biller_id!r}", step.id)
-                cash = _amount(step.amount, cash_by_step, step.id)
+                cash = _amount(step.amount, cash_by_step, balances, step.id)
                 debit(step.from_account, cash, step.id)
-                # The biller's free-text reference is untrusted, so it is never displayed.
-                to, to_display = biller.id, biller.name
-                equity = None
+                to, equity = biller.id, None
 
             case EquityBuy():
                 account(step.funding_account, step.id)
                 quote = view.market.quote(step.symbol, now)
                 if quote is None:
                     raise EvaluationError("UNKNOWN_SYMBOL", f"no listing {step.symbol!r}", step.id)
-                notional = _amount(step.notional, cash_by_step, step.id)
+                notional = _amount(step.notional, cash_by_step, balances, step.id)
                 quantity = int(notional // quote.price)
                 if quantity < 1:
                     raise EvaluationError(
@@ -100,10 +124,9 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                         f"S${notional:,.2f} does not buy one share at S${quote.price}",
                         step.id,
                     )
-                cash = (quote.price * quantity).quantize(CENT)
+                cash = share_cost(quote.price, quantity)
                 debit(step.funding_account, cash, step.id)
                 to = step.symbol
-                to_display = f"{quote.name} ({step.symbol}) x {quantity} @ S${quote.price}"
                 equity = EquityFill(
                     symbol=step.symbol,
                     quote_id=quote.quote_id,
@@ -123,7 +146,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
                 type=step.type,
                 from_account=from_account,
                 to=to,
-                to_display=to_display,
+                to_display=destination_label(view, step.type, to, equity),
                 amount=cash,
                 equity=equity,
             )
@@ -132,13 +155,22 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
     return ResolvedPlan(
         customer_id=view.customer_id,
         steps=tuple(resolved),
-        balances_after={k: v.quantize(CENT) for k, v in balances.items()},
+        balances_after={k: v.quantize(CENT, rounding=ROUND_DOWN) for k, v in balances.items()},
     )
 
 
-def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], step_id: str) -> Decimal:
+def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], balances: dict[str, Decimal],
+            step_id: str) -> Decimal:
     if isinstance(expr, FixedAmount):
-        return expr.value.quantize(CENT)
+        return expr.value.quantize(CENT, rounding=ROUND_DOWN)
+    if isinstance(expr, FractionOfBalance):
+        if expr.account not in balances:
+            raise EvaluationError("UNKNOWN_ACCOUNT", f"no account {expr.account!r}", step_id)
+        # Round down so a fraction never exceeds what the customer said.
+        value = (balances[expr.account] * expr.numerator / expr.denominator).quantize(CENT, rounding=ROUND_DOWN)
+        if value <= 0:
+            raise EvaluationError("ZERO_AMOUNT", "amount rounds to zero", step_id)
+        return value
     if expr.step not in cash_by_step:
         raise EvaluationError(
             "FORWARD_REFERENCE", f"{expr.step} must be an earlier step", step_id

@@ -8,11 +8,24 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, localcontext
 from types import MappingProxyType
+
+CENT = Decimal("0.01")
+
+
+def share_cost(price: Decimal, quantity: int) -> Decimal:
+    """Cash for a share buy. Shared by the evaluator and the gateway so they can never disagree.
+
+    Rounds up to the cent (never undercharges); since quantity = floor(notional / price)
+    and notional is whole cents, the cost still never exceeds the notional.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 28
+        return (price * quantity).quantize(CENT, rounding=ROUND_UP)
 
 
 @dataclass
@@ -52,27 +65,41 @@ class Quote:
     symbol: str
     name: str
     price: Decimal
+    issued_at: datetime
     expires_at: datetime
 
 
 class Market:
     QUOTE_TTL = timedelta(seconds=60)
 
-    def __init__(self, listings: Mapping[str, tuple[str, Decimal]]):
+    def __init__(
+        self,
+        listings: Mapping[str, tuple[str, Decimal]],
+        clock: Callable[[], datetime] | None = None,
+    ):
         self._listings = dict(listings)  # symbol -> (name, price)
         self._issued: dict[str, Quote] = {}
         self._ids = itertools.count(1)
+        self._clock = clock
+
+    def bind_clock(self, clock: Callable[[], datetime]) -> None:
+        """The gateway binds its own clock, so quote times never come from the caller."""
+        self._clock = clock
 
     def name(self, symbol: str) -> str | None:
         listing = self._listings.get(symbol)
         return listing[0] if listing else None
 
-    def quote(self, symbol: str, now: datetime) -> Quote | None:
+    def quote(self, symbol: str, now: datetime | None = None) -> Quote | None:
+        """Issue a quote. `now` is only used when no clock is bound (standalone tests)."""
         listing = self._listings.get(symbol)
         if listing is None:
             return None
+        issued_at = self._clock() if self._clock else now
+        if issued_at is None:
+            raise ValueError("Market has no clock and no time was given")
         name, price = listing
-        quote = Quote(f"Q{next(self._ids):06d}", symbol, name, price, now + self.QUOTE_TTL)
+        quote = Quote(f"Q{next(self._ids):06d}", symbol, name, price, issued_at, issued_at + self.QUOTE_TTL)
         self._issued[quote.quote_id] = quote
         return quote
 
@@ -87,6 +114,8 @@ class BankView:
     customer_id: str
     customer_name: str
     kyc_tier: str
+    kyc_status: str
+    investment_eligible: bool
     accounts: Mapping[str, Account]
     payees: Mapping[str, Payee]
     billers: Mapping[str, Biller]
@@ -98,6 +127,8 @@ class Bank:
     customer_id: str
     customer_name: str
     kyc_tier: str
+    kyc_status: str  # "verified" or "pending"
+    investment_eligible: bool  # passed the investment suitability check (CKA)
     accounts: dict[str, Account]
     payees: dict[str, Payee]
     billers: dict[str, Biller]
@@ -108,6 +139,8 @@ class Bank:
             customer_id=self.customer_id,
             customer_name=self.customer_name,
             kyc_tier=self.kyc_tier,
+            kyc_status=self.kyc_status,
+            investment_eligible=self.investment_eligible,
             accounts=MappingProxyType({k: dataclasses.replace(a) for k, a in self.accounts.items()}),
             payees=MappingProxyType(dict(self.payees)),
             billers=MappingProxyType(dict(self.billers)),
@@ -125,6 +158,8 @@ def seed_bank(today: date) -> Bank:
         customer_id="C001",
         customer_name="Tan Wei Ling",
         kyc_tier="standard",
+        kyc_status="verified",
+        investment_eligible=True,
         accounts={
             "SAV": Account("SAV", "Savings Account", Decimal("12400.00")),
             "JNT": Account("JNT", "Joint Account", Decimal("3200.00")),

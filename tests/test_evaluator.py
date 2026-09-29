@@ -84,3 +84,15 @@ def test_schema_rejects_malformed_drafts():
             OwnTransfer(id="t1", from_account="SAV", to_account="JNT", amount=FixedAmount(value=Decimal("1"))),
             OwnTransfer(id="t1", from_account="SAV", to_account="JNT", amount=FixedAmount(value=Decimal("2"))),
         ])
+
+
+def test_fraction_of_balance_uses_the_balance_when_the_step_runs(bank, clock):
+    from glassvault.schema import FractionOfBalance
+
+    plan = Plan(steps=[
+        OwnTransfer(id="t1", from_account="SAV", to_account="JNT", amount=FixedAmount(value=Decimal("800"))),
+        OwnTransfer(id="t2", from_account="JNT", to_account="SAV",
+                    amount=FractionOfBalance(account="JNT", numerator=1, denominator=4)),
+    ])
+    resolved = resolve(plan, bank.view(), now=clock.now)
+    assert resolved.steps[1].amount == Decimal("1000.00")  # a quarter of (3,200 + 800)
