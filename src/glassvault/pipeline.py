@@ -43,6 +43,8 @@ from .schema import (
     Clarification,
     ClarifyOption,
     ConfirmationView,
+    Enquiry,
+    EnquiryAnswer,
     EquityBuy,
     FixedAmount,
     FractionOfBalance,
@@ -54,9 +56,10 @@ from .schema import (
     ResolvedPlan,
     Turn,
 )
+from .enquiry import answer as answer_enquiry
 from .validator import PlanDiff, diff_plans, independent_plan
 
-OutcomeKind = Literal["confirm", "clarify", "frozen", "refused", "held", "error"]
+OutcomeKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held", "error"]
 
 # Customer-facing messages are fixed templates, never LLM text.
 MSG_FROZEN = "I've stopped this request because a safety check didn't match what you asked for. Nothing has been sent."
@@ -89,6 +92,7 @@ class Outcome:
     policy: PolicyDecision | None = None
     challenge: Challenge | None = None
     diff: PlanDiff | None = None
+    answer: EnquiryAnswer | None = None  # kind "answer": a read-only enquiry, from bank records
     trace: tuple[TraceEvent, ...] = ()
     llm_calls: int = 0
 
@@ -180,7 +184,9 @@ class Pipeline:
         trace.append(TraceEvent("quarantine", True, f"{len(context.placeholders)} untrusted text field(s) replaced by placeholders"))
 
         # The validator never sees the draft, so it can run at the same time as the drafter.
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # The pool is not waited on: a question or an enquiry returns without the validator.
+        pool = ThreadPoolExecutor(max_workers=2)
+        try:
             draft_future = pool.submit(draft, dialogue, context, drafter)
             check_future = pool.submit(independent_plan, dialogue, context, validator)
             try:
@@ -192,6 +198,8 @@ class Pipeline:
             if isinstance(drafted, Clarification):
                 trace.append(TraceEvent("draft", True, f"asks: {drafted.reason}"))
                 raise _Stop("clarify", drafted.question, clarification=drafted)
+            if isinstance(drafted, Enquiry):
+                return self._answer(drafted, view, trace, drafter, validator)
             trace.append(TraceEvent("draft", True, f"{len(drafted.steps)} step(s) drafted"))
 
             self._check_provenance(drafted, dialogue, view, trace)
@@ -200,6 +208,8 @@ class Pipeline:
             except DraftError as e:
                 trace.append(TraceEvent("validator", False, f"validator failed: {e}"))
                 raise _Stop("frozen", MSG_FROZEN) from e
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         # Resolve only now, so a share quote's 60-second clock starts after the LLM calls.
         plan = self._resolve(drafted, view, now, trace, stage="resolve")
@@ -250,6 +260,16 @@ class Pipeline:
             "confirm", MSG_CONFIRM, plan=plan, confirmation=confirmation, policy=decision,
             challenge=challenge, trace=tuple(trace), llm_calls=drafter.calls + validator.calls,
         )
+
+    def _answer(self, enquiry: Enquiry, view: BankView, trace: list[TraceEvent],
+                drafter: _CountingLLM, validator: _CountingLLM) -> Outcome:
+        """Read-only: answered from bank records in fixed wording; no plan, no challenge, no money moves."""
+        target = view.accounts[enquiry.account].name if enquiry.account in view.accounts else "all accounts"
+        trace.append(TraceEvent("draft", True, f"enquiry: {enquiry.kind} ({target})"))
+        result = answer_enquiry(enquiry, view, self._gateway.history())
+        trace.append(TraceEvent("records", True, f"{len(result.lines)} line(s) from bank records; nothing to sign"))
+        return Outcome("answer", "\n".join(result.lines), answer=result, trace=tuple(trace),
+                       llm_calls=drafter.calls + validator.calls)
 
     # --- control-plane checks ------------------------------------------------
 
@@ -529,6 +549,7 @@ def agent_factory(
             llm_calls=outcome.llm_calls,
             step_up=(outcome.policy.outcome == "step_up") if outcome.policy else None,
             challenge=outcome.challenge,
+            answer_lines=outcome.answer.lines if outcome.answer else (),
         )
 
     return run
