@@ -77,6 +77,6 @@ automated defences.
 
 ## Built with
 
-Claude Code (architecture, safety core, pipeline, tests) and Tencent WorkBuddy /
-CodeBuddy (demo UI stylesheet and more; see [docs/codebuddy-log.md](docs/codebuddy-log.md)
-and the screenshots in `docs/codebuddy/`).
+Claude Code (architecture, safety core, pipeline, UI, tests) and Tencent
+WorkBuddy / CodeBuddy (Mandarin amount parsing and other self-contained pieces;
+see [docs/codebuddy-log.md](docs/codebuddy-log.md) and the screenshots in `docs/codebuddy/`).
