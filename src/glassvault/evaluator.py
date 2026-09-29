@@ -1,0 +1,152 @@
+"""Deterministic evaluator: Plan -> ResolvedPlan.
+
+All money arithmetic happens here, in Decimal, never inside the LLM. Steps run
+in order against a simulated copy of the balances, so "move a grand to joint,
+then buy shares with half of it" is checked with the joint balance *after* the
+first transfer.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import ROUND_DOWN, Decimal
+
+from .bank import BankView
+from .schema import (
+    AmountExpr,
+    BillPayment,
+    EquityBuy,
+    EquityFill,
+    FixedAmount,
+    OwnTransfer,
+    PayNowTransfer,
+    Plan,
+    ResolvedPlan,
+    ResolvedStep,
+)
+
+CENT = Decimal("0.01")
+
+
+class EvaluationError(Exception):
+    def __init__(self, code: str, message: str, step_id: str | None = None):
+        super().__init__(f"{code}: {message}" + (f" (step {step_id})" if step_id else ""))
+        self.code = code
+        self.message = message
+        self.step_id = step_id
+
+
+def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
+    balances = {a.id: a.balance for a in view.accounts.values()}
+    cash_by_step: dict[str, Decimal] = {}
+    resolved: list[ResolvedStep] = []
+
+    def account(account_id: str, step_id: str) -> None:
+        if account_id not in balances:
+            raise EvaluationError("UNKNOWN_ACCOUNT", f"no account {account_id!r}", step_id)
+
+    def debit(account_id: str, amount: Decimal, step_id: str) -> None:
+        if balances[account_id] < amount:
+            short = amount - balances[account_id]
+            raise EvaluationError(
+                "INSUFFICIENT_FUNDS", f"{account_id} is short by S${short:,.2f}", step_id
+            )
+        balances[account_id] -= amount
+
+    for step in plan.steps:
+        match step:
+            case OwnTransfer():
+                account(step.from_account, step.id)
+                account(step.to_account, step.id)
+                if step.from_account == step.to_account:
+                    raise EvaluationError("SAME_ACCOUNT", "cannot transfer to the same account", step.id)
+                cash = _amount(step.amount, cash_by_step, step.id)
+                debit(step.from_account, cash, step.id)
+                balances[step.to_account] += cash
+                to, to_display = step.to_account, view.accounts[step.to_account].name
+                equity = None
+
+            case PayNowTransfer():
+                account(step.from_account, step.id)
+                payee = view.payees.get(step.payee_id)
+                if payee is None:
+                    raise EvaluationError("UNKNOWN_PAYEE", f"no saved payee {step.payee_id!r}", step.id)
+                cash = _amount(step.amount, cash_by_step, step.id)
+                debit(step.from_account, cash, step.id)
+                to, to_display = payee.id, f"{payee.legal_name} ({payee.paynow_proxy})"
+                equity = None
+
+            case BillPayment():
+                account(step.from_account, step.id)
+                biller = view.billers.get(step.biller_id)
+                if biller is None:
+                    raise EvaluationError("UNKNOWN_BILLER", f"no saved biller {step.biller_id!r}", step.id)
+                cash = _amount(step.amount, cash_by_step, step.id)
+                debit(step.from_account, cash, step.id)
+                # The biller's free-text reference is untrusted, so it is never displayed.
+                to, to_display = biller.id, biller.name
+                equity = None
+
+            case EquityBuy():
+                account(step.funding_account, step.id)
+                quote = view.market.quote(step.symbol, now)
+                if quote is None:
+                    raise EvaluationError("UNKNOWN_SYMBOL", f"no listing {step.symbol!r}", step.id)
+                notional = _amount(step.notional, cash_by_step, step.id)
+                quantity = int(notional // quote.price)
+                if quantity < 1:
+                    raise EvaluationError(
+                        "NOTIONAL_TOO_SMALL",
+                        f"S${notional:,.2f} does not buy one share at S${quote.price}",
+                        step.id,
+                    )
+                cash = (quote.price * quantity).quantize(CENT)
+                debit(step.funding_account, cash, step.id)
+                to = step.symbol
+                to_display = f"{quote.name} ({step.symbol}) x {quantity} @ S${quote.price}"
+                equity = EquityFill(
+                    symbol=step.symbol,
+                    quote_id=quote.quote_id,
+                    price=quote.price,
+                    quantity=quantity,
+                    quote_expires_at=quote.expires_at,
+                )
+
+            case _:  # pragma: no cover - the Step union is exhaustive
+                raise EvaluationError("UNKNOWN_STEP", f"unsupported step {step!r}")
+
+        from_account = step.funding_account if isinstance(step, EquityBuy) else step.from_account
+        cash_by_step[step.id] = cash
+        resolved.append(
+            ResolvedStep(
+                id=step.id,
+                type=step.type,
+                from_account=from_account,
+                to=to,
+                to_display=to_display,
+                amount=cash,
+                equity=equity,
+            )
+        )
+
+    return ResolvedPlan(
+        customer_id=view.customer_id,
+        steps=tuple(resolved),
+        balances_after={k: v.quantize(CENT) for k, v in balances.items()},
+    )
+
+
+def _amount(expr: AmountExpr, cash_by_step: dict[str, Decimal], step_id: str) -> Decimal:
+    if isinstance(expr, FixedAmount):
+        return expr.value.quantize(CENT)
+    if expr.step not in cash_by_step:
+        raise EvaluationError(
+            "FORWARD_REFERENCE", f"{expr.step} must be an earlier step", step_id
+        )
+    # Round down so a fraction never exceeds what the customer said.
+    value = (cash_by_step[expr.step] * expr.numerator / expr.denominator).quantize(
+        CENT, rounding=ROUND_DOWN
+    )
+    if value <= 0:
+        raise EvaluationError("ZERO_AMOUNT", "amount rounds to zero", step_id)
+    return value

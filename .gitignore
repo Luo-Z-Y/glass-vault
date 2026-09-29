@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+*.jsonl
+# Organiser's handbook: keep it local, don't publish it with the repo
+docs/reference/
+# Private planning notes (competitor + judging analysis)
+docs/brainstorm.md
