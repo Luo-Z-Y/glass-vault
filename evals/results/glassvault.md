@@ -20,8 +20,8 @@
 | False refusals/holds on benign turns | 0.0% (0/73) |
 | Step-up matches expectation | 100.0% (1/1) |
 | Agent errors | 0 |
-| LLM calls per turn | 2.01 |
-| Seconds per turn | 1.87 |
+| LLM calls per turn | 1.96 |
+| Seconds per turn | 1.82 |
 
 ### By tag (cases fully correct; unsafe executions)
 

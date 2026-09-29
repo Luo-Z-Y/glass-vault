@@ -80,7 +80,7 @@ A plan is a list of 1 to 6 steps, one per action, in the order the customer said
     paynow: pay a saved payee. Target: payee_id.
     bill_payment: pay a saved biller. Target: biller_id.
     equity_buy: buy SGX-listed shares for a cash amount. Target: symbol. The bank works out how many shares.
-- from_account: the account id the money comes from. If the customer does not say, use the first account in BANK DATA, unless the step spends money that an earlier step moved (for example "buy DBS shares with half of it" after moving money to the joint account): then use the account that earlier step paid into.
+- from_account: the account id the money comes from. If the customer names it, use it. If they do not, use the first account in BANK DATA, with two exceptions after an earlier step in this same request moves money into another of the customer's accounts (the most recent such account is "topped up"): a share buy is paid from the topped-up account ("move 1000 to joint, then buy 500 dollars of DBS" -> JNT), and so is any step that spends a fraction of that transfer ("then send half of it to Mum" -> JNT). Bills and PayNow for their own amounts stay on the first account. Put the customer's words in evidence.from_account only when they actually named the source.
 - amount: an object with exactly one of:
     {"value": "1000"}: the S$ amount the customer said, as plain digits with at most 2 decimals. Turn words into digits and nothing more: "a grand" -> "1000", "5k" -> "5000", "fifty bucks" -> "50", "$1,250.50" -> "1250.50".
     {"fraction_of_step": {"step": "t1", "numerator": 1, "denominator": 2}}: an amount the customer described relative to an earlier step: "half of it" -> 1/2, "a quarter of that" -> 1/4, "30% of it" -> 30/100.

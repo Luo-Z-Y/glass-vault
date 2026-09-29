@@ -137,3 +137,52 @@ def test_buy_n_of_a_stock_is_a_cash_amount(pipeline):
     o = talk(pipeline, "Buy 2000 of OCBC shares from the joint account")
     assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
     assert o.plan.steps[0].equity.quantity == 118  # floor(2000 / 16.85)
+
+
+def test_unstated_source_after_a_top_up_follows_the_rule(pipeline):
+    o = talk(pipeline, "move 1000 from savings to joint, then buy 500 dollars of DBS")
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    assert [s.from_account for s in o.plan.steps] == ["SAV", "JNT"]
+
+
+WRONG_SOURCE = {"steps": [
+    {"id": "t1", "type": "own_transfer", "from_account": "SAV", "to_account": "JNT",
+     "amount": {"value": "1000"}, "evidence": {"amount": "1000", "to_account": "joint"}},
+    {"id": "t2", "type": "equity_buy", "from_account": "SAV", "symbol": "D05",
+     "amount": {"value": "500"}, "evidence": {"amount": "500 dollars", "symbol": "DBS"}},
+]}
+TOP_UP_THEN_BUY = "move 1000 from savings to joint, then buy 500 dollars of DBS"
+
+
+def test_a_source_mistake_both_models_share_gets_a_fixed_question(gateway):
+    from glassvault.drafter import PLAN_TOOL
+    from glassvault.llm import ScriptedLLM, tool_response
+    from glassvault.validator import RECORD_TOOL
+
+    drafter = ScriptedLLM([tool_response(PLAN_TOOL, WRONG_SOURCE)])
+    validator = ScriptedLLM([tool_response(RECORD_TOOL, WRONG_SOURCE)])  # the same blind spot
+    o = Pipeline(LocalGatewayPort(gateway), drafter, validator).handle([Turn(role="customer", text=TOP_UP_THEN_BUY)])
+    assert o.kind == "clarify" and o.challenge is None
+    assert "which you're moving money into" in o.message
+    assert [opt.value for opt in o.clarification.options] == ["JNT", "SAV"]
+
+
+def test_a_source_disagreement_is_frozen_by_the_validator_first(bank, gateway):
+    from glassvault.drafter import PLAN_TOOL
+    from glassvault.llm import ScriptedLLM, tool_response
+
+    drafter = ScriptedLLM([tool_response(PLAN_TOOL, WRONG_SOURCE)])
+    o = Pipeline(LocalGatewayPort(gateway), drafter, OfflineLLM(bank.view)).handle(
+        [Turn(role="customer", text=TOP_UP_THEN_BUY)])
+    assert o.kind == "frozen" and o.challenge is None
+
+
+def test_bills_after_a_top_up_keep_the_usual_default(pipeline):
+    o = talk(pipeline, "Move a grand to my joint account, then pay my SP bill")
+    assert o.kind == "confirm", [e.detail for e in o.trace if not e.ok]
+    assert [s.from_account for s in o.plan.steps] == ["SAV", "SAV"]
+
+
+def test_the_customer_can_answer_the_source_question(pipeline):
+    o = talk(pipeline, "move 1000 from savings to joint, then buy 500 dollars of DBS", "from savings please")
+    assert o.kind == "confirm"

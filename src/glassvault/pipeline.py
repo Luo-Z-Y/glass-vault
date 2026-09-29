@@ -217,6 +217,9 @@ class Pipeline:
             trace.append(TraceEvent("validator", False, "; ".join(d.detail for d in diff.diffs)))
             raise _Stop("frozen", MSG_FROZEN, plan=plan, diff=diff)
         trace.append(TraceEvent("validator", True, "independent re-derivation matches the draft"))
+        # After the comparison: a rogue draft that swaps the source is frozen above; this catches a
+        # default that both models got wrong the same way.
+        self._check_sources(drafted, _agent_text(dialogue), view, trace)
 
         decision = evaluate_policy(plan, view, now=now, history=self._gateway.history(now - timedelta(days=7)))
         reasons = "; ".join(r.message for r in decision.reasons)
@@ -343,8 +346,56 @@ class Pipeline:
                         freeze(f"{step.id}: the customer never mentioned {listing}")
         trace.append(TraceEvent("provenance", True, "every amount, payee and destination traces to the customer's words"))
 
+    def _check_sources(self, plan: Plan, asked: str, view: BankView, trace: list[TraceEvent]) -> None:
+        """Share buys and "half of it" steps with no stated source pay from the account an earlier step tops up.
+
+        That is the product's default for "move 1000 to joint, then buy 500 dollars of DBS". A draft that
+        breaks it gets a fixed-wording question instead of a silent guess. Bills and PayNow for their own
+        amounts keep the usual default.
+        """
+        topped_up: list[str] = []
+        transfers: dict[str, str] = {}  # own-transfer step id -> account it pays into
+        for step in plan.steps:
+            if isinstance(step, OwnTransfer):
+                topped_up.append(step.to_account)
+                transfers[step.id] = step.to_account
+                continue
+            source = step.funding_account if isinstance(step, EquityBuy) else step.from_account
+            expr = step.notional if isinstance(step, EquityBuy) else step.amount
+            spends_transfer = isinstance(expr, FractionOfStep) and expr.step in transfers
+            rule_applies = isinstance(step, EquityBuy) or spends_transfer
+            stated = bool(step.evidence.get("from_account", "").strip())
+            if stated or not topped_up or not rule_applies or source == topped_up[-1] or SOURCE_QUESTION in asked:
+                continue
+            if source not in view.accounts or topped_up[-1] not in view.accounts:
+                continue  # the evaluator reports unknown accounts
+            usual, target = view.accounts[source], view.accounts[topped_up[-1]]
+            question = (f"Should I pay for {_describe(step, view)} from your {target.name}, "
+                        f"{SOURCE_QUESTION}, or from your {usual.name}?")
+            trace.append(TraceEvent("provenance", False,
+                                    f"{step.id}: source not stated; drafted from {usual.name}, "
+                                    f"but this request tops up the {target.name}"))
+            raise _Stop("clarify", question, clarification=Clarification(
+                reason="missing_info", question=question,
+                options=(ClarifyOption(label=target.name, value=target.id),
+                         ClarifyOption(label=usual.name, value=usual.id)),
+            ))
+
 
 # --- helpers -------------------------------------------------------------------
+
+SOURCE_QUESTION = "which you're moving money into"
+
+
+def _describe(step: Any, view: BankView) -> str:
+    match step:
+        case EquityBuy():
+            return f"the {view.market.name(step.symbol) or step.symbol} shares"
+        case PayNowTransfer() if step.payee_id in view.payees:
+            return f"the PayNow to {view.payees[step.payee_id].legal_name}"
+        case BillPayment() if step.biller_id in view.billers:
+            return f"the {view.billers[step.biller_id].name} bill"
+    return f"step {step.id}"
 
 _GENERIC_WORDS = {"account", "group", "holdings", "bank", "the", "my", "of", "and", "ltd", "limited"}
 
