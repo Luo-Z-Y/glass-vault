@@ -83,14 +83,13 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
             continue
         step_id = f"t{len(steps) + 1}"
         amount, evidence = _amount(clause, steps, view)
-        if SHARES.search(clause):
+        if SHARES.search(clause) or (re.search(r"\bbuy\b", clause, re.I) and _symbol(clause, view)[0]):
             symbol, said = _symbol(clause, view)
             if symbol is None:
                 return _ask("missing_info", "Which shares would you like to buy?")
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to invest in {view.market.name(symbol)}?")
-            source = steps[-1]["to_account"] if steps and steps[-1]["type"] == "own_transfer" else "SAV"
-            steps.append({"id": step_id, "type": "equity_buy", "from_account": source, "symbol": symbol,
+            steps.append({"id": step_id, "type": "equity_buy", "from_account": _default_source(steps, amount, shares=True), "symbol": symbol,
                           "amount": amount, "evidence": {**evidence, "symbol": said}})
         elif (every := ALL_BILLS.search(clause)) is not None:
             for biller in view.billers.values():
@@ -101,7 +100,7 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
             biller, said = _biller(clause, view)
             if biller is None:
                 return _ask("missing_info", "Which bill would you like to pay?")
-            steps.append({"id": step_id, "type": "bill_payment", "from_account": "SAV", "biller_id": biller,
+            steps.append({"id": step_id, "type": "bill_payment", "from_account": _default_source(steps, amount), "biller_id": biller,
                           "amount": amount or {"full_amount_due": True},
                           "evidence": {**evidence, "biller_id": said}})
         elif (target := _own_account(clause, view)) is not None:
@@ -124,11 +123,18 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
                 candidates = resolved
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to send to {view.payees[candidates[0]].legal_name}?")
-            steps.append({"id": step_id, "type": "paynow", "from_account": "SAV", "payee_id": candidates[0],
+            steps.append({"id": step_id, "type": "paynow", "from_account": _default_source(steps, amount), "payee_id": candidates[0],
                           "amount": amount, "evidence": {**evidence, "payee_id": phrase}})
     if not steps:
         return _ask("missing_info", "Sorry, I didn't catch that. You can move money, send PayNow, pay a bill or buy shares.")
     return {"steps": steps}
+
+
+def _default_source(steps: list[dict[str, Any]], amount: dict[str, Any] | None, *, shares: bool = False) -> str:
+    """Share buys and fractions of a transfer pay from the topped-up account; everything else from Savings."""
+    topped_up = [s["to_account"] for s in steps if s["type"] == "own_transfer"]
+    spends_transfer = bool(amount and "fraction_of_step" in amount)
+    return topped_up[-1] if topped_up and (shares or spends_transfer) else "SAV"
 
 
 def _ask(reason: str, question: str, options: list[dict[str, str]] | None = None) -> dict[str, Any]:
