@@ -15,14 +15,14 @@ Touch ID), and a zero-trust gateway executes only what was signed. On stage we
 switch the AI to rogue mode and show it still cannot move a cent.
 
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): 14 attacks and the layer that stops each
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): trust zones, invariants, gateway error codes
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): trust zones, the request pipeline, invariants, error codes, processes and known gaps
 - [docs/CONTRACTS.md](docs/CONTRACTS.md): module interfaces
 
 ## Run it
 
 ```bash
 uv sync
-uv run pytest                          # ~1,060 tests
+uv run pytest                          # ~1,080 tests
 uv run python -m glassvault.demo       # CLI: signed happy path + 6 blocked attacks
 uv run python -m glassvault.web.server # web demo on http://localhost:8000
 uv run python -i scripts/playground.py # try to rob the gateway yourself
@@ -34,15 +34,16 @@ works out of the box.
 
 ### With a real LLM
 
-Copy `.env.example` to `.env` and fill it in. Use a different model family for
-the validator so its check is genuinely independent. For Tencent Hunyuan on
-Tencent Cloud International TokenHub:
+Copy `.env.example` to `.env` and add your key. The defaults use DeepSeek's own
+API, with `deepseek-flash` drafting and `deepseek-v4-pro` validating, and thinking
+mode off for both roles (in thinking mode DeepSeek rejects forced tool calls).
+A validator from a different model family makes its check more independent; for
+Tencent Hunyuan on Tencent Cloud International TokenHub, set:
 
 ```
-GV_LLM_BASE_URL=https://tokenhub-intl.tencentcloudmaas.com/v1
-GV_LLM_API_KEY=...
-GV_DRAFTER_MODEL=hy3
-GV_VALIDATOR_MODEL=deepseek-v4-flash
+GV_VALIDATOR_BASE_URL=https://tokenhub-intl.tencentcloudmaas.com/v1
+GV_VALIDATOR_API_KEY=...
+GV_VALIDATOR_MODEL=hy3
 ```
 
 ### Benchmark
@@ -50,18 +51,22 @@ GV_VALIDATOR_MODEL=deepseek-v4-flash
 ```bash
 uv run python -m glassvault.evals --agent naive      --out evals/results/naive.json
 uv run python -m glassvault.evals --agent glassvault --out evals/results/glassvault.json
+uv run python -m glassvault.evals --agent glassvault --cases evals/heldout.yaml --out evals/results/heldout-glassvault.json
 ```
 
 The naive baseline (one LLM call, raw bank data, no checks) runs against a
 plain gateway; Glass Vault runs with its full control plane. A careless
 simulated customer signs every confirmation, so safety has to come from the
-automated defences.
+automated defences. `evals/heldout.yaml` and `evals/heldout2.yaml` are
+independent test sets: 20 cases each that WorkBuddy wrote from a spec of the
+bank data and outcome rules, without seeing our prompts or cases.
 
 ## Layout
 
 | Path | Role | Trust zone |
 |---|---|---|
 | `schema.py` | Plan (LLM draft), ResolvedPlan (what is signed), Challenge, Turn | shared |
+| `bank.py` | Mock bank: accounts, payees, billers, SGX quotes; read-only `BankView` snapshots | shared |
 | `context.py` | What the LLM may see; untrusted text quarantined as `<REF_n>` | agent zone |
 | `llm.py`, `drafter.py` | OpenAI-compatible client; the drafter's prompt and tools | agent zone |
 | `offline.py` | Rule-based LLM stand-in for keyless demos | agent zone |
@@ -71,12 +76,15 @@ automated defences.
 | `validator.py` | Blind re-derivation and plan diff | control plane |
 | `policy.py`, `renderer.py` | KYC and risk rules; the bank-rendered confirmation and voice script | control plane |
 | `gateway.py`, `audit.py` | The only code that moves money; hash-chained audit log | gateway |
+| `crypto.py`, `stepup.py` | Plan hashes and device signatures; step-up codes | gateway |
 | `services/` | FastAPI gateway service with WebAuthn passkeys | gateway |
-| `web/` | Demo server, customer app and security console | demo |
+| `web/`, `demo.py` | Demo server, customer app and security console; CLI demo | demo |
 | `rogue.py`, `evals/` | Rogue-AI attacks and the benchmark | testing |
 
 ## Built with
 
 Claude Code (architecture, safety core, pipeline, UI, tests) and Tencent
-WorkBuddy / CodeBuddy (Mandarin amount parsing and other self-contained pieces;
-see [docs/codebuddy-log.md](docs/codebuddy-log.md) and the screenshots in `docs/codebuddy/`).
+WorkBuddy (the two independent held-out benchmark sets, `evals/heldout.yaml` and
+`evals/heldout2.yaml`). Every
+WorkBuddy session, including the attempts that did not deliver, is logged in
+[docs/codebuddy-log.md](docs/codebuddy-log.md) with screenshots in `docs/codebuddy/`.
