@@ -1,37 +1,86 @@
 # Glass Vault architecture
 
-## Trust zones
+## Trust zones and tech stack
 
-```
-┌─ Customer device (trusted) ────────────────────────────────────────────────┐
-│ chat and push-to-talk (speech-to-text runs in the browser)                 │
-│ confirmation screen, bank voice (browser text-to-speech), passkey          │
-└────────────────────────────────────────────────────────────────────────────┘
-        │ the customer's words; voice turns are marked as voice
-        ▼
-┌─ Agent zone (assume compromised) ──────────────────────────────────────────┐
-│ injection scan → quarantine (<REF_n> handles) → drafter LLM                │
-│ the drafter returns a Plan (a form) or a clarifying question               │
-└────────────────────────────────────────────────────────────────────────────┘
-        │ draft Plan: ids, quoted evidence, fractions; no arithmetic
-        ▼
-┌─ Control plane (deterministic code; one LLM that can only stop) ───────────┐
-│ provenance → evaluator (Decimal maths) → blind validator + diff            │
-│ → risk rules → template confirmation (screen, spoken script, hash)         │
-└────────────────────────────────────────────────────────────────────────────┘
-        │ ResolvedPlan + script hash: it can ask for a challenge, not execute
-        ▼
-┌─ Gateway (the only ledger writer) ─────────────────────────────────────────┐
-│ issue:   strict re-parse, labels vs bank records, re-simulate, risk rules  │
-│          → Challenge, kept with the gateway's own copy of the plan         │
-│ execute: signature, nonce, expiry, step-up code; then, on its own copy:    │
-│          re-simulate, re-run risk rules, audit EXECUTED, apply balances    │
-└────────────────────────────────────────────────────────────────────────────┘
-        │ Challenge{plan_hash, nonce, expires_at, …}         ▲
-        ▼                                                    │ passkey signature
-┌─ Customer device ──────────────────────────────────────────────────────────┐
-│ reads the bank-rendered confirmation, signs the challenge with the passkey │
-└────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph ask[" "]
+        direction LR
+        h_ask["📱 Customer device<br/>browser · trusted"] ~~~ mic["🎙️ Push-to-talk<br/>Web Speech API"] --> chat["💬 Chat<br/>HTML · CSS · vanilla JS"]
+    end
+
+    llm["☁️ LLM APIs · OpenAI SDK<br/>DeepSeek<br/>Tencent Hunyuan hy3"]
+
+    subgraph agent[" "]
+        direction LR
+        h_agent["🤖 Agent zone<br/>assume compromised"] ~~~ scan["🧹 Injection scan<br/>customer's words"] --> quarantine["🔒 Quarantine<br/>bank text → REF_n"] --> drafter["✍️ Drafter LLM<br/>deepseek-flash"]
+    end
+
+    subgraph control[" "]
+        direction LR
+        h_control["🧮 Control plane<br/>deterministic"] ~~~ prov["🔎 Provenance<br/>words → fields"] --> evaluator["➗ Evaluator<br/>Decimal maths"] --> validator["🕵️ Blind validator<br/>deepseek-v4-pro"] --> policy["⚖️ Risk rules<br/>KYC · limits"] --> render["📝 Confirmation<br/>templates"]
+    end
+
+    subgraph issue[" "]
+        direction LR
+        h_issue["🏦 Gateway<br/>issues the challenge"] ~~~ reparse["🧾 Strict re-parse<br/>Pydantic v2"] --> labels["🏷️ Names vs<br/>bank records"] --> simulate["🧮 Re-simulate<br/>+ risk rules"] --> challenge["🎟️ Challenge<br/>hash · nonce · 2 min"]
+    end
+
+    subgraph approve[" "]
+        direction LR
+        h_approve["📱 Customer device<br/>approves"] ~~~ screen["🔊 Confirmation<br/>speechSynthesis voice"] --> passkey["🔐 Passkey<br/>WebAuthn · Face ID"]
+    end
+
+    subgraph execute[" "]
+        direction LR
+        h_execute["🏦 Gateway<br/>executes what was signed"] ~~~ once["⏱️ Nonce · expiry<br/>single use"] --> verify["🔑 Signature<br/>py_webauthn · Ed25519"] --> stepup["🔢 Step-up<br/>HMAC code"] --> audit["📜 Audit log<br/>SHA-256 chain"] --> ledger["💰 Ledger<br/>in-memory"]
+    end
+
+    subgraph stack[" "]
+        direction LR
+        h_stack["🧰 Built with"] ~~~ py["🐍 Python 3.12<br/>uv"] ~~~ api["⚡ FastAPI<br/>Uvicorn"] ~~~ pyd["🧱 Pydantic v2<br/>Decimal"] ~~~ sec["🔐 cryptography<br/>py_webauthn"] ~~~ sdk["🤖 OpenAI SDK<br/>httpx"] ~~~ qa["🧪 pytest<br/>PyYAML evals"]
+    end
+
+    ask -->|"customer's words"| agent
+    llm -.-|"model calls"| agent
+    llm -.- control
+    agent -->|"draft Plan"| control
+    control -->|"ResolvedPlan"| issue
+    issue -->|"challenge"| approve
+    approve -->|"signed challenge"| execute
+    execute ~~~ stack
+
+    classDef device fill:#FFFFFF,stroke:#0F6E56,color:#04342C
+    classDef agentN fill:#FFFFFF,stroke:#D85A30,color:#4A1B0C
+    classDef controlN fill:#FFFFFF,stroke:#534AB7,color:#26215C
+    classDef gatewayN fill:#FFFFFF,stroke:#185FA5,color:#042C53
+    classDef stackN fill:#FFFFFF,stroke:#888780,color:#2C2C2A
+    classDef external fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A,stroke-dasharray:4 3
+    classDef hDevice fill:none,stroke:none,color:#04342C,font-weight:bold
+    classDef hAgent fill:none,stroke:none,color:#4A1B0C,font-weight:bold
+    classDef hControl fill:none,stroke:none,color:#26215C,font-weight:bold
+    classDef hGateway fill:none,stroke:none,color:#042C53,font-weight:bold
+    classDef hStack fill:none,stroke:none,color:#2C2C2A,font-weight:bold
+    class mic,chat,screen,passkey device
+    class scan,quarantine,drafter agentN
+    class prov,evaluator,validator,policy,render controlN
+    class reparse,labels,simulate,challenge,once,verify,stepup,audit,ledger gatewayN
+    class py,api,pyd,sec,sdk,qa stackN
+    class llm external
+    class h_ask,h_approve hDevice
+    class h_agent hAgent
+    class h_control hControl
+    class h_issue,h_execute hGateway
+    class h_stack hStack
+    style ask fill:#E1F5EE,stroke:#0F6E56
+    style approve fill:#E1F5EE,stroke:#0F6E56
+    style agent fill:#FAECE7,stroke:#993C1D
+    style control fill:#EEEDFE,stroke:#534AB7
+    style issue fill:#E6F1FB,stroke:#185FA5
+    style execute fill:#E6F1FB,stroke:#185FA5
+    style stack fill:#F1EFE8,stroke:#888780
+    %% Real arrows only: the ~~~ links just line up the row headers and must stay invisible.
+    linkStyle 1,3,4,6,7,8,9,11,12,13,15,17,18,19,20,27,28,29,30,31,32,33 stroke:#888780,stroke-width:1.5px
 ```
 
 The validator's LLM call runs at the same time as the drafter's, because it
@@ -41,6 +90,73 @@ The agent zone and the control plane reach the gateway only through
 `pipeline.GatewayPort`. It can read a snapshot of accounts, payees, billers and
 share quotes, read the execution history, and ask for a challenge. It has no
 execute method, and neither zone holds a credential that moves money.
+
+In the web demo, the agent zone, the control plane and the gateway run in one
+FastAPI + Uvicorn process; the gateway can also run as its own service (see
+[Processes](#processes)).
+
+| Layer | Technology |
+|---|---|
+| Customer app | HTML, CSS and vanilla JavaScript with no build step; Web Speech API for push-to-talk; `speechSynthesis` for the bank voice; WebAuthn passkeys (Face ID / Touch ID) |
+| Server | Python 3.12, FastAPI + Uvicorn, Pydantic v2 models, `Decimal` for every amount |
+| AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
+| Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
+| Data | In-memory mock bank; the audit log is kept in memory, and the gateway service can also append it to a JSONL file |
+| Tooling | uv and hatchling, pytest (~1,080 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
+
+## Codebase map
+
+Colours match the diagram above: coral for the agent zone, purple for the
+control plane, blue for the gateway, teal for the customer app and demos, amber
+for the benchmark and tests, pink for the docs.
+
+```mermaid
+flowchart TB
+    subgraph repo["📦 glass-vault/"]
+        direction TB
+        subgraph pkg["📁 src/glassvault/ · the Python package"]
+            direction TB
+            g_agent["🤖 Agent zone<br/>context.py · llm.py<br/>drafter.py · offline.py"]
+            g_control["🧮 Control plane<br/>numbers.py · pipeline.py<br/>evaluator.py · policy.py<br/>validator.py · renderer.py"]
+            g_gateway["🏦 Gateway<br/>gateway.py · audit.py<br/>crypto.py · stepup.py"]
+            g_shared["🔗 Shared models<br/>schema.py · bank.py"]
+            g_services["📁 services/<br/>gateway_api.py<br/>webauthn_verifier.py<br/>static/dev.html"]
+            g_web["📁 web/ · demo server<br/>server.py"]
+            g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css"]
+            g_evals["📁 evals/ · harness<br/>harness.py · dataset.py<br/>naive.py · __main__.py"]
+            g_demo["🎭 Demo + rogue AI<br/>demo.py · rogue.py"]
+            g_agent ~~~ g_shared ~~~ g_evals
+            g_control ~~~ g_services ~~~ g_demo
+            g_gateway ~~~ g_web ~~~ g_static
+        end
+        subgraph rest[" "]
+            direction TB
+            r_evals["📁 evals/ · test cases<br/>cases.yaml · 84 cases<br/>heldout.yaml · 20 cases<br/>heldout2.yaml · 20 cases<br/>results/"]
+            r_docs["📁 docs/<br/>architecture · contracts<br/>threat model · LLM choice<br/>WorkBuddy log"]
+            r_tests["📁 tests/<br/>18 modules<br/>~1,080 tests"]
+            r_project["⚙️ Project root<br/>README.md · uv.lock<br/>pyproject.toml<br/>.env.example<br/>scripts/playground.py"]
+        end
+        pkg ~~~ rest
+    end
+
+    classDef shared fill:#FFFFFF,stroke:#888780,color:#2C2C2A
+    classDef agentN fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    classDef controlN fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef gatewayN fill:#E6F1FB,stroke:#185FA5,color:#042C53
+    classDef demoN fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef testN fill:#FAEEDA,stroke:#BA7517,color:#412402
+    classDef docN fill:#FBEAF0,stroke:#993556,color:#4B1528
+    class g_shared,r_project shared
+    class g_agent agentN
+    class g_control controlN
+    class g_gateway,g_services gatewayN
+    class g_web,g_static,g_demo demoN
+    class g_evals,r_evals,r_tests testN
+    class r_docs docN
+    style repo fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    style pkg fill:#FFFFFF,stroke:#5F5E5A,color:#2C2C2A
+    style rest fill:none,stroke:none
+```
 
 ## What happens to one message
 

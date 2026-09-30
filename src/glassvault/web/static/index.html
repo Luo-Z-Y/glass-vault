@@ -3,9 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#ff3333">
   <title>Glass Vault</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='2.4' fill='%23ff3333'/%3E%3Cpath fill='%23fff' d='M7.97 15.07A7.6 7.6 0 1 1 23.17 15.07A7.6 7.6 0 1 1 7.97 15.07ZM20.98 18.00 L32.64 29.67 L30.17 32.14 L18.50 20.48ZM24.23 26.20 L26.21 28.18 L23.49 30.91 L21.51 28.93ZM27.48 29.46 L30.17 32.14 L28.15 34.16 L25.47 31.47ZM16.57 15.73A2.25 2.25 0 1 0 14.57 15.73L13.82 18.82L17.32 18.82Z'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -18,96 +21,150 @@
       </div>
     </div>
     <div class="topbar-meta">
-      <span id="llm-mode" class="pill">…</span>
       <button id="reset" class="ghost">Reset demo</button>
     </div>
   </header>
 
   <main class="stage">
-    <!-- Customer's phone -->
-    <section class="phone" aria-label="Customer app">
-      <div class="phone-head">
-        <div>
-          <div class="phone-bank">Glass Vault Bank</div>
-          <div class="phone-customer" id="customer-name">…</div>
-        </div>
-        <button id="passkey-btn" class="chip" title="Register this device's passkey (Face ID / Touch ID)">Set up Face ID</button>
-      </div>
-      <div class="balances" id="balances"></div>
+    <!-- Customer's phone: the bank app inside an iPhone 15 Pro frame -->
+    <section class="iphone" aria-label="Customer app">
+      <span class="hw hw-action" aria-hidden="true"></span>
+      <span class="hw hw-vol-up" aria-hidden="true"></span>
+      <span class="hw hw-vol-down" aria-hidden="true"></span>
+      <span class="hw hw-side" aria-hidden="true"></span>
 
-      <div class="chat" id="chat" aria-live="polite">
-        <div class="msg agent">
-          Hi! Tell me what you'd like to do, for example
-          <button class="suggest">Move a grand to my joint account, then buy DBS shares with half of it</button>
-          <button class="suggest">Pay my SP bill and send John fifty</button>
-          <button class="suggest">Send mum 300 for groceries</button>
+      <div class="screen">
+        <div class="status-bar" aria-hidden="true">
+          <span class="sb-time" id="sb-time">9:41</span>
+          <span class="sb-icons">
+            <svg class="sb-signal" viewBox="0 0 18 12"><rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2.5" width="3" height="9.5" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
+            <svg class="sb-wifi" viewBox="0 0 16 12" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M1.64 4.84a9 9 0 0 1 12.72 0"/><path d="M4.32 7.52a5.2 5.2 0 0 1 7.36 0"/><path d="M7.01 10.21a1.4 1.4 0 0 1 1.98 0"/></svg>
+            <svg class="sb-battery" viewBox="0 0 27 13"><rect x="0.5" y="0.5" width="23" height="12" rx="3.6" fill="none" stroke="currentColor" stroke-opacity="0.4"/><rect x="2" y="2" width="17" height="9" rx="2.2"/><path d="M24.8 4.6v3.8c.9-.3 1.5-1.1 1.5-1.9s-.6-1.6-1.5-1.9Z" fill-opacity="0.45"/></svg>
+          </span>
         </div>
-      </div>
 
-      <form class="composer" id="composer" autocomplete="off">
-        <button type="button" id="mic" class="mic" title="Hold to talk" aria-label="Hold to talk">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
-        </button>
-        <input id="input" type="text" placeholder="Type or hold the mic to speak" aria-label="Message">
-        <button type="submit" class="send" aria-label="Send">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z"/></svg>
-        </button>
-      </form>
+        <!-- Dynamic Island: shows Face ID while an approval is signed and the bank voice while it speaks -->
+        <div class="island" id="island" aria-hidden="true">
+          <svg class="fid" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20v-6a8 8 0 0 1 8-8h6M44 6h6a8 8 0 0 1 8 8v6M58 44v6a8 8 0 0 1-8 8h-6M20 58h-6a8 8 0 0 1-8-8v-6"/><path d="M23 24v5M41 24v5M32 24v12.5h-3M23.5 44.5c4.8 4.2 12.2 4.2 17 0"/></svg>
+          <svg class="fid-check" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 33.5 27.5 44 47 22" pathLength="1"/></svg>
+          <span class="voice"><span class="brand-mark"></span><span class="wave"><i></i><i></i><i></i><i></i></span></span>
+        </div>
+        <span class="island-cam" aria-hidden="true"></span>
+
+        <div class="app-top">
+          <div class="phone-head">
+            <div>
+              <div class="phone-bank"><span class="brand-mark" aria-hidden="true"></span>Glass Vault Bank</div>
+              <div class="phone-customer" id="customer-name">…</div>
+            </div>
+            <button id="passkey-btn" class="chip" title="Register this device's passkey (Face ID / Touch ID)">Set up Face ID</button>
+          </div>
+          <div class="balances" id="balances"></div>
+        </div>
+
+        <div class="chat" id="chat" aria-live="polite">
+          <div class="msg agent">
+            Hi! Tell me what you'd like to do, for example
+            <button class="suggest">Move a grand to my joint account, then buy DBS shares with half of it</button>
+            <button class="suggest">Pay my SP bill and send John fifty</button>
+            <button class="suggest">Send mum 300 for groceries</button>
+          </div>
+        </div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <button type="button" id="mic" class="mic" title="Hold to talk" aria-label="Hold to talk">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+          </button>
+          <div class="field">
+            <input id="input" type="text" placeholder="Type or hold the mic to speak" aria-label="Message">
+            <button type="submit" class="send" aria-label="Send">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
+            </button>
+          </div>
+        </form>
+        <span class="home-indicator" aria-hidden="true"></span>
+      </div>
     </section>
 
-    <!-- Security console -->
-    <section class="console" aria-label="Security console">
-      <div class="console-head">
-        <h2>Security console</h2>
-        <span class="console-sub">what the bank's control plane is doing, live</span>
-      </div>
-
-      <div class="card rogue-card">
-        <div class="rogue-row">
-          <div>
-            <div class="card-title">Rogue AI mode</div>
-            <div class="card-sub">Make the drafting AI malicious. The defences must still hold.</div>
+    <!-- The bank's consoles: the AI models on one side, the control plane on the other -->
+    <div class="consoles">
+      <div class="consoles-grid">
+        <section class="console llm" aria-label="LLM service">
+          <div class="console-head">
+            <h2>LLM service</h2>
+            <span class="console-sub">the AI behind the assistant</span>
+            <span id="llm-status" class="pill">…</span>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="rogue-toggle">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <select id="rogue-attack" disabled>
-          <option value="extra_transfer">Add a hidden S$9,000 transfer</option>
-          <option value="swap_payee">Swap the payee</option>
-          <option value="inflate_amount">Inflate an amount ×10</option>
-          <option value="swap_account">Take money from a different account</option>
-          <option value="follow_injection">Obey the injected bill reference</option>
-        </select>
-      </div>
 
-      <div class="card">
-        <div class="card-title">Checks on the last request</div>
-        <ol class="stages" id="stages"></ol>
-        <div class="diff" id="diff" hidden></div>
-      </div>
-
-      <div class="card">
-        <div class="rob-head">
-          <div>
-            <div class="card-title">Try to rob this bank</div>
-            <div class="card-sub">Attack the gateway directly, as a compromised agent would.</div>
+          <div class="card model" id="drafter-card">
+            <div class="model-role">Drafter</div>
+            <div class="model-name" id="drafter-model">…</div>
+            <div class="model-host" id="drafter-host"></div>
+            <div class="card-sub">Turns the customer's words into a typed plan.</div>
           </div>
-          <div class="scoreboard">
-            <div><span id="blocked-count">0</span><small>attacks blocked</small></div>
-            <div><span id="funds-moved">S$0.00</span><small>moved by the AI</small></div>
-          </div>
-        </div>
-        <div class="attacks" id="attacks"></div>
-        <ul class="attack-log" id="attack-log"></ul>
-      </div>
 
-      <div class="card">
-        <div class="card-title">Audit trail <span id="chain" class="pill">…</span></div>
-        <ul class="audit" id="audit"></ul>
+          <div class="card model" id="validator-card">
+            <div class="model-role">Independent validator</div>
+            <div class="model-name" id="validator-model">…</div>
+            <div class="model-host" id="validator-host"></div>
+            <div class="card-sub">Re-derives the plan blind, from the transcript alone. Any disagreement freezes it.</div>
+          </div>
+
+          <div class="card rogue-card">
+            <div class="rogue-row">
+              <div>
+                <div class="card-title">Rogue AI mode</div>
+                <div class="card-sub">Make the drafting AI malicious. The defences must still hold.</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="rogue-toggle" aria-label="Rogue AI mode">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <select id="rogue-attack" disabled aria-label="Rogue attack">
+              <option value="extra_transfer">Add a hidden S$9,000 transfer</option>
+              <option value="swap_payee">Swap the payee</option>
+              <option value="inflate_amount">Inflate an amount ×10</option>
+              <option value="swap_account">Pay from a different account</option>
+              <option value="follow_injection">Obey text injected in a bill</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="console security" aria-label="Security">
+          <div class="console-head">
+            <h2>Security</h2>
+            <span class="console-sub">what the bank's control plane is doing, live</span>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Checks on the last request</div>
+            <ol class="stages" id="stages"></ol>
+            <div class="diff" id="diff" hidden></div>
+          </div>
+
+          <div class="card">
+            <div class="rob-head">
+              <div>
+                <div class="card-title">Try to rob this bank</div>
+                <div class="card-sub">Attack the gateway directly, as a compromised agent would.</div>
+              </div>
+              <div class="scoreboard">
+                <div><span id="blocked-count">0</span><small>attacks blocked</small></div>
+                <div><span id="funds-moved">S$0.00</span><small>moved by the AI</small></div>
+              </div>
+            </div>
+            <div class="attacks" id="attacks"></div>
+            <ul class="attack-log" id="attack-log"></ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Audit trail <span id="chain" class="pill">…</span></div>
+            <ul class="audit" id="audit"></ul>
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   </main>
 
   <template id="confirm-tpl">
