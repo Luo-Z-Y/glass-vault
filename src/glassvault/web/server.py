@@ -170,6 +170,9 @@ def outcome_json(o: Outcome) -> dict[str, Any]:
     }
     if o.clarification:
         data["clarification"] = o.clarification.model_dump(mode="json")
+    if o.answer:
+        # Lines to show and a script for the bank voice, both in the bank's fixed wording.
+        data["answer"] = o.answer.model_dump(mode="json")
     if o.confirmation:
         data["confirmation"] = o.confirmation.model_dump(mode="json")
         # The renderer lists the payment steps first, then any risk notices.

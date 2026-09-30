@@ -161,9 +161,9 @@ flowchart TB
 ## What happens to one message
 
 `Pipeline.handle` (`pipeline.py`) turns the dialogue into one outcome:
-`confirm`, `clarify`, `frozen`, `refused`, `held` or `error`. The stages run in
-this order, and each adds a `TraceEvent` that the web demo's security console
-shows.
+`confirm`, `clarify`, `answer`, `frozen`, `refused`, `held` or `error`. The
+stages run in this order, and each adds a `TraceEvent` that the web demo's
+security console shows.
 
 1. **Current request.** Only the turns since the last executed request count,
    so money already sent is not "said" again.
@@ -178,7 +178,10 @@ shows.
    `validator.independent_plan` answer by tool call on a flat schema
    (`submit_plan` / `ask_clarification`, `record_request` / `report_unclear`),
    with one repair round for formatting mistakes. A drafter failure is `error`;
-   a validator failure is `frozen`.
+   a validator failure is `frozen`. A question about balances or recent
+   transactions (`answer_enquiry`) is `answer`: `enquiry.answer` reads it from
+   bank records in fixed wording (the `records` stage), and none of the checks
+   below run, because nothing is signed and no money moves.
 5. **Provenance.** `Pipeline._check_provenance`: every evidence quote must
    appear in the customer's words, every fixed amount must be one they said and
    did not take back (or a bill's amount due), every fraction must be said (for
