@@ -460,6 +460,15 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .msg.agent { align-self: flex-start; background: var(--bubble); }
 .msg.customer { align-self: flex-end; background: var(--red-tint); }
 
+/* An enquiry's answer: bank records, one line each. A statement's date, description and
+   amount sit in columns, so the amounts line up on the right. */
+.answer-line { font-variant-numeric: tabular-nums; }
+.answer-line + .answer-line { margin-top: 2px; }
+.msg.answer.statement { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 5px 10px; max-width: 94%; }
+.statement .answer-line { display: contents; }
+.statement .answer-line > span:last-child { text-align: right; white-space: nowrap; }
+.statement .answer-line > span:only-child { grid-column: 1 / -1; text-align: left; white-space: normal; }
+
 /* Bubble tails: a bubble-coloured curve, trimmed by a screen-coloured one. */
 .msg.agent::before, .msg.agent::after,
 .msg.customer::before, .msg.customer::after {
@@ -806,7 +815,7 @@ body.rogue .rogue-card { border-color: var(--red-line); background: var(--red-so
 .stages li.fail { background: var(--bad-soft); box-shadow: inset 3px 0 0 var(--red); }
 .stage-body { min-width: 0; }
 .stage-name { font-weight: 600; font-size: 13.5px; }
-.stages li.skip .stage-name { font-weight: 500; }
+.stages li.skip .stage-name, .stages li.na .stage-name { font-weight: 500; }
 .detail { font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
 
 .dot {
@@ -821,6 +830,8 @@ body.rogue .rogue-card { border-color: var(--red-line); background: var(--red-so
 .dot.fail { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.18); }
 .dot.pending { background: #c7c7cc; animation: breathe 1.6s ease-in-out infinite; }
 .dot.skip { background: transparent; border: 2px solid var(--line-strong); }
+/* A dash, not a ring: this request had no need of the check. */
+.dot.na { height: 2px; margin-top: 9px; border-radius: 1px; }
 
 @keyframes breathe { 50% { opacity: 0.35; } }
 
