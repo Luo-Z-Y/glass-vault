@@ -15,7 +15,7 @@ Touch ID), and a zero-trust gateway executes only what was signed. On stage we
 switch the AI to rogue mode and show it still cannot move a cent.
 
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): 14 attacks and the layer that stops each
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): trust zones, the request pipeline, invariants, error codes, processes and known gaps
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): architecture, tech-stack and codebase diagrams; the request pipeline, invariants, error codes, processes and known gaps
 - [docs/CONTRACTS.md](docs/CONTRACTS.md): module interfaces
 
 ## Run it

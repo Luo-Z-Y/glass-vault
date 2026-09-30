@@ -5,18 +5,25 @@
 const $ = (sel) => document.querySelector(sel);
 const chat = $("#chat");
 const input = $("#input");
+const phone = $(".iphone");
+const island = $("#island");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// [trace stage, label, path]. After the draft a request takes one path: a payment runs
+// the payment checks, while a balance or transactions enquiry is answered from bank
+// records and needs none of them.
 const STAGES = [
   ["injection-scan", "Scam-script scan"],
   ["quarantine", "Untrusted text quarantined"],
   ["draft", "AI draft"],
-  ["provenance", "Every detail traced to your words"],
-  ["resolve", "Maths done in code"],
-  ["validator", "Independent AI re-derivation"],
-  ["policy", "Risk and KYC rules"],
-  ["challenge", "Bank-rendered confirmation"],
-  ["signature", "Your Face ID signature"],
+  ["records", "Answered from bank records", "answer"],
+  ["provenance", "Every detail traced to your words", "payment"],
+  ["resolve", "Maths done in code", "payment"],
+  ["validator", "Independent AI re-derivation", "payment"],
+  ["policy", "Risk and KYC rules", "payment"],
+  ["challenge", "Bank-rendered confirmation", "payment"],
+  ["signature", "Your Face ID signature", "payment"],
 ];
 
 let state = null;
@@ -67,6 +74,9 @@ function renderOutcome(o) {
       }
       break;
     }
+    case "answer":
+      renderAnswer(o);
+      break;
     case "confirm":
       renderConfirm(o);
       break;
@@ -85,6 +95,21 @@ function renderOutcome(o) {
       addMsg("refused", o.message || "Something went wrong. Nothing has been sent.");
   }
   chat.scrollTop = chat.scrollHeight;
+}
+
+// A balance or transactions enquiry: bank records in the bank's fixed wording, one line each.
+// Statement lines are "date  description  amount", two spaces apart (the bank collapses
+// spaces inside a description), so they lay out as columns with the amounts lined up.
+function renderAnswer(o) {
+  const node = addMsg("agent answer");
+  for (const line of o.answer?.lines || o.message.split("\n")) {
+    const cells = line.split(/ {2,}/);
+    const row = el("div", "answer-line");
+    for (const cell of cells) row.appendChild(el("span", "", cell));
+    node.appendChild(row);
+    if (cells.length === 3) node.classList.add("statement");
+  }
+  if (lastInputWasVoice && o.answer?.spoken_script) speakBankVoice(o.answer.spoken_script);
 }
 
 function renderConfirm(o) {
@@ -146,16 +171,23 @@ function renderStages(trace, { signature } = {}) {
   list.innerHTML = "";
   const byStage = new Map(trace.map((t) => [t.stage, t]));
   if (signature) byStage.set("signature", signature);
-  const failedAt = STAGES.findIndex(([key]) => byStage.get(key) && !byStage.get(key).ok);
+  // The answer row shows only for answers, so a payment's checks read as before; for an
+  // answer, the payment checks it had no need of say so.
+  const answered = byStage.has("records");
+  const stages = STAGES.filter(([, , path]) => path !== "answer" || answered);
+  const failedAt = stages.findIndex(([key]) => byStage.get(key) && !byStage.get(key).ok);
 
-  STAGES.forEach(([key, label], i) => {
+  stages.forEach(([key, label, path], i) => {
     const t = byStage.get(key);
-    let status = t ? (t.ok ? "ok" : "fail") : failedAt !== -1 && i > failedAt ? "skip" : "pending";
+    const status = t ? (t.ok ? "ok" : "fail")
+      : answered && path === "payment" ? "na"
+      : failedAt !== -1 && i > failedAt ? "skip" : "pending";
     const li = el("li", status);
     li.appendChild(el("span", `dot ${status}`));
     const body = el("div", "stage-body");
     body.appendChild(el("div", "stage-name", label));
-    body.appendChild(el("div", "detail", t ? t.detail : status === "skip" ? "not reached" : "waiting"));
+    const idle = { na: "not needed for a read-only answer", skip: "not reached", pending: "waiting" };
+    body.appendChild(el("div", "detail", t ? t.detail : idle[status]));
     li.appendChild(body);
     if (!reduceMotion) {
       li.style.opacity = 0;
@@ -193,6 +225,18 @@ async function refreshAudit() {
   }
 }
 
+// The LLM service panel: which model drafts and which one re-derives, live or offline.
+function renderLLM(llm) {
+  const status = $("#llm-status");
+  status.textContent = llm.live ? "Live" : "Offline";
+  status.className = `pill ${llm.live ? "ok" : ""}`;
+  for (const role of ["drafter", "validator"]) {
+    const { model, host } = llm[role];
+    $(`#${role}-model`).textContent = llm.live ? model : "Offline stand-in";
+    $(`#${role}-host`).textContent = llm.live ? host || "" : "rule-based, runs without an API key";
+  }
+}
+
 function renderState(s) {
   state = s;
   $("#customer-name").textContent = s.customer_name;
@@ -204,9 +248,7 @@ function renderState(s) {
     chip.appendChild(el("strong", "", `S$${Number(a.balance).toLocaleString("en-SG", { minimumFractionDigits: 2 })}`));
     balances.appendChild(chip);
   }
-  const mode = $("#llm-mode");
-  mode.textContent = s.llm_mode;
-  mode.className = `pill ${s.llm_mode.startsWith("offline") ? "" : "ok"}`;
+  renderLLM(s.llm);
   $("#passkey-btn").textContent = s.passkey.registered ? "Face ID ready" : "Set up Face ID";
   $("#passkey-btn").classList.toggle("ok", s.passkey.registered);
   $("#rogue-toggle").checked = Boolean(s.rogue);
@@ -250,6 +292,7 @@ async function cancel() {
 async function approveChallenge(o, card) {
   const btn = card.querySelector(".approve");
   btn.disabled = true;
+  const faceId = faceIdScan();
   try {
     let body = { nonce: o.challenge.nonce, step_up_code: card.querySelector(".stepup input")?.value || null };
     if (state.passkey.registered) {
@@ -259,6 +302,7 @@ async function approveChallenge(o, card) {
       body.simulated = true;
     }
     const { receipts, state: s } = await api("/api/approve", body);
+    await faceId(true);
     card.querySelector(".confirm-actions").remove();
     const done = addMsg("done", "Done. Receipts:");
     for (const r of receipts) done.appendChild(el("div", "receipt", `${r.reference}  ${r.summary}`));
@@ -266,6 +310,7 @@ async function approveChallenge(o, card) {
     const trace = [...o.trace, { stage: "signature", ok: true, detail: "gateway verified the signature over this exact plan" }];
     renderStages(trace);
   } catch (err) {
+    await faceId(false);
     btn.disabled = false;
     const code = err.code ? `${err.status} ${err.code}` : err.name;
     addMsg("refused", `Not sent: ${code}. ${err.message || ""}`);
@@ -344,6 +389,35 @@ async function registerPasskey() {
 }
 
 // ---------------------------------------------------------------------------
+// iPhone chrome: the status bar clock and the Dynamic Island. Cosmetic only;
+// the island never takes part in approving anything.
+
+function tickClock() {
+  const now = new Date();
+  $("#sb-time").textContent = `${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function setIsland(mode) {
+  if (mode) island.dataset.mode = mode;
+  else delete island.dataset.mode;
+}
+
+// Face ID scanning in the island while the approval is signed. Returns a function that
+// shows the result (after a short minimum scan, so it reads on stage) and resolves once
+// the result is visible; the island then shrinks back by itself.
+function faceIdScan() {
+  const started = performance.now();
+  setIsland("scan");
+  return async (ok) => {
+    await sleep(Math.max(0, 800 - (performance.now() - started)));
+    const mode = ok ? "ok" : "fail";
+    setIsland(mode);
+    setTimeout(() => island.dataset.mode === mode && setIsland(null), ok ? 1100 : 1300);
+    await sleep(ok ? 450 : 300);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Voice: browser speech recognition in, a fixed "bank voice" out.
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -365,12 +439,14 @@ function setupMic() {
     };
     recognition.onend = () => {
       mic.classList.remove("listening");
+      phone.classList.remove("mic-on");
       if (input.value.trim()) {
         lastInputWasVoice = true;
         send(input.value);
       }
     };
     mic.classList.add("listening");
+    phone.classList.add("mic-on");
     recognition.start();
   };
   const stop = () => recognition && recognition.stop();
@@ -380,7 +456,7 @@ function setupMic() {
 }
 
 function bankVoice() {
-  // Always the same voice for bank confirmations, so customers learn "this voice = the bank".
+  // Always the same voice for bank confirmations and answers, so customers learn "this voice = the bank".
   const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
   return voices.find((v) => /en-(SG|GB)/.test(v.lang)) || voices[0] || null;
 }
@@ -402,6 +478,8 @@ function chime() {
   } catch {}
 }
 
+let speaking = null;
+
 function speakBankVoice(script) {
   if (!("speechSynthesis" in window)) return;
   speechSynthesis.cancel();
@@ -409,7 +487,18 @@ function speakBankVoice(script) {
   const u = new SpeechSynthesisUtterance(script);
   u.voice = bankVoice();
   u.rate = 0.95;
+  // The island shows the bank voice while it speaks. Face ID takes over the island if
+  // an approval starts meanwhile, and the timer covers browsers that never fire "end".
+  const done = () => {
+    if (speaking !== u) return;
+    speaking = null;
+    if (island.dataset.mode === "voice") setIsland(null);
+  };
+  u.onend = u.onerror = done;
+  speaking = u;
+  if (!island.dataset.mode) setIsland("voice");
   setTimeout(() => speechSynthesis.speak(u), 450);
+  setTimeout(done, 2000 + script.length * 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +565,8 @@ $("#reset").addEventListener("click", async () => {
 });
 
 (async function init() {
+  tickClock();
+  setInterval(tickClock, 10_000);
   setupMic();
   if ("speechSynthesis" in window) speechSynthesis.getVoices();
   renderState(await api("/api/state"));

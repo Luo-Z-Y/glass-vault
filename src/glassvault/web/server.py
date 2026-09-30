@@ -129,7 +129,21 @@ app = FastAPI(title="Glass Vault demo")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def revalidate_ui(request: Request, call_next):
+    """Browsers must revalidate the page and its assets, so an old page never runs with new JS."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # --- JSON shapes -------------------------------------------------------------------
+
+
+def llm_json(llm: LLM) -> dict[str, str | None]:
+    model, _, host = llm.name.partition("@")  # names are "model@host" (see OpenAICompatLLM)
+    return {"model": model, "host": host or None}
 
 
 def state_json() -> dict[str, Any]:
@@ -138,6 +152,8 @@ def state_json() -> dict[str, Any]:
         "customer_name": demo.bank.customer_name,
         "accounts": [{"id": a.id, "name": a.name, "balance": str(a.balance)} for a in demo.bank.accounts.values()],
         "llm_mode": demo.llm_mode,
+        "llm": {"live": not isinstance(demo.drafter, OfflineLLM),
+                "drafter": llm_json(demo.drafter), "validator": llm_json(demo.validator)},
         "rogue": demo.rogue,
         "passkey": {"registered": demo.verifier.has_passkey(customer),
                     "simulated_allowed": not demo.verifier.has_passkey(customer)},
@@ -154,6 +170,9 @@ def outcome_json(o: Outcome) -> dict[str, Any]:
     }
     if o.clarification:
         data["clarification"] = o.clarification.model_dump(mode="json")
+    if o.answer:
+        # Lines to show and a script for the bank voice, both in the bank's fixed wording.
+        data["answer"] = o.answer.model_dump(mode="json")
     if o.confirmation:
         data["confirmation"] = o.confirmation.model_dump(mode="json")
         # The renderer lists the payment steps first, then any risk notices.
