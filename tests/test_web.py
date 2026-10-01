@@ -52,3 +52,24 @@ def test_a_message_that_is_not_valid_text_is_turned_away(monkeypatch, tmp_path):
 
     assert bad.status_code == 400
     assert good.status_code == 200 and good.json()["outcome"]["kind"] == "answer"
+
+
+def test_the_voice_panel_names_the_trtc_services_or_the_browser(monkeypatch, tmp_path):
+    for key in ("GV_LLM_API_KEY", "GV_TRTC_SDK_APP_ID"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
+    server = importlib.import_module("glassvault.web.server")
+    from glassvault.voice import TrtcAsr, TrtcTts
+
+    demo = server.new_demo()
+    monkeypatch.setattr(server, "demo", demo)
+    with TestClient(server.app) as client:
+        browser = client.get("/api/state").json()["voice"]
+        demo.tts, demo.asr = TrtcTts(1400000000, "id", "key"), TrtcAsr(1400000000, "secret")
+        trtc = client.get("/api/state").json()["voice"]
+
+    assert browser == {"speak": {"engine": "browser", "name": None}, "listen": {"engine": "browser", "name": None}}
+    assert trtc["speak"] == {"engine": "trtc", "name": demo.tts.name, "host": "trtc.intl.tencentcloudapi.com",
+                             "region": "ap-singapore", "voice": "Articulate Narrator"}
+    assert trtc["listen"] == {"engine": "trtc", "name": demo.asr.name, "host": "asr-intl.cloud-rtc.com",
+                              "model": "bigmodel", "language": "en"}
