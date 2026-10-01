@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Union
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # "t1" to "t99", numbered in the order the customer said the steps.
 StepId = Annotated[str, Field(pattern=r"^t[1-9][0-9]?$")]
@@ -232,6 +232,16 @@ class Turn(_Frozen):
     text: str
     via: Literal["text", "voice"] = "text"  # voice turns may contain speech-to-text slips
 
+    @field_validator("text")
+    @classmethod
+    def _encodable(cls, text: str) -> str:
+        # A lone surrogate is not text: it cannot be hashed into a challenge or written to the log.
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError as e:
+            raise ValueError("text is not valid Unicode") from e
+        return text
+
 
 class ClarifyOption(_Frozen):
     label: str = Field(description="rendered from bank records")
@@ -298,6 +308,10 @@ class EnquiryAnswer(_Frozen):
 # --- Audit records ------------------------------------------------------------
 
 OutcomeKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held", "error"]
+# A record past these limits is refused; the pipeline stops a conversation before it gets there.
+MAX_RECORD_TURNS = 100
+MAX_RECORD_CHARS = 50_000
+MAX_RECORD_BYTES = 256 * 1024
 
 
 class TraceLine(_Frozen):
@@ -326,7 +340,12 @@ class RequestRecord(_Frozen):
     challenge carries.
     """
 
-    transcript: tuple[Turn, ...] = Field(max_length=100, description="the turns of this request, with their via flag")
+    transcript: tuple[Turn, ...] = Field(
+        max_length=MAX_RECORD_TURNS, description="the turns of this request, with their via flag"
+    )
+    transcript_dropped: int = Field(
+        default=0, ge=0, description="oldest turns left out to fit the limits; never on a confirm record"
+    )
     outcome: OutcomeKind
     message: str = Field(max_length=4000, description="what the customer was told")
     nonce: str | None = Field(default=None, max_length=64, description="confirm only: the challenge issued")
@@ -347,6 +366,8 @@ class RequestRecord(_Frozen):
     def _consistent(self) -> RequestRecord:
         if (self.outcome == "confirm") != (self.nonce is not None):
             raise ValueError("a confirm record names its challenge's nonce, and only a confirm record does")
-        if sum(len(t.text) for t in self.transcript) > 50_000:
+        if self.nonce is not None and self.transcript_dropped:
+            raise ValueError("a confirm record holds the whole transcript its challenge was hashed over")
+        if sum(len(t.text) for t in self.transcript) > MAX_RECORD_CHARS:
             raise ValueError("transcript too long")
         return self

@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..audit import AuditLog
 from ..bank import Bank, seed_bank
@@ -237,8 +237,16 @@ def message(req: MessageRequest) -> dict[str, Any]:
     text = req.text.strip()[:500]
     if not text:
         raise HTTPException(400, "empty message")
-    demo.dialogue.append(Turn(role="customer", text=text, via="voice" if req.voice else "text"))
-    outcome = demo.pipeline.handle(demo.dialogue)
+    try:
+        turn = Turn(role="customer", text=text, via="voice" if req.voice else "text")
+    except ValidationError:
+        raise HTTPException(400, "message is not valid text") from None
+    demo.dialogue.append(turn)
+    try:
+        outcome = demo.pipeline.handle(demo.dialogue)
+    except Exception:
+        demo.dialogue.clear()  # one broken turn must not break every turn after it
+        raise
     if outcome.kind == "clarify":
         demo.dialogue.append(Turn(role="agent", text=outcome.message))
     else:

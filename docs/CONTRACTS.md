@@ -211,10 +211,12 @@ class Gateway:
                         transcript_hash: str | None = None,
                         policy_decision_id: str | None = None) -> Challenge   # hashes: SHA-256 hex
     def record_request(self, record: RequestRecord) -> AuditEntry
-        # REQUEST entry; a confirm record must match its pending challenge's two hashes
+        # REQUEST entry, at most 256 KiB; a confirm record is the first for its pending challenge
+        # and must match its plan_hash, transcript_hash and script_hash
     def pending_plan(self, nonce: str) -> ResolvedPlan | None                   # the gateway's own copy
     def execute(self, plan: ResolvedPlan | None = None, *, nonce: str | None = None,
                 signature: Any = None, step_up_code: str | None = None) -> list[Receipt]
+        # a challenge with a transcript_hash needs its confirm record on file (RECORD_REQUIRED)
 
 class GatewayError(Exception): code: str; status: int; message: str   # codes and statuses in STATUS
 @dataclass(frozen=True)

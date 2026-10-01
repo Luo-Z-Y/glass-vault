@@ -102,7 +102,7 @@ FastAPI + Uvicorn process; the gateway can also run as its own service (see
 | AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
 | Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
 | Data | In-memory mock bank; the audit log is kept in memory, and the gateway service can also append it to a JSONL file |
-| Tooling | uv and hatchling, pytest (~1,080 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
+| Tooling | uv and hatchling, pytest (~1,150 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
 
 ## Codebase map
 
@@ -133,7 +133,7 @@ flowchart TB
             direction TB
             r_evals["📁 evals/ · test cases<br/>cases.yaml · 84 cases<br/>heldout.yaml · 20 cases<br/>heldout2.yaml · 20 cases<br/>results/"]
             r_docs["📁 docs/<br/>architecture · contracts<br/>threat model · LLM choice<br/>WorkBuddy log"]
-            r_tests["📁 tests/<br/>18 modules<br/>~1,080 tests"]
+            r_tests["📁 tests/<br/>21 modules<br/>~1,150 tests"]
             r_project["⚙️ Project root<br/>README.md · uv.lock<br/>pyproject.toml<br/>.env.example<br/>scripts/playground.py"]
         end
         pkg ~~~ rest
@@ -228,7 +228,10 @@ audit log (step 12).
     outcome and its message, the model names, and for a `confirm` the
     challenge's nonce. The outcome is returned only after the record is filed;
     if filing fails, the turn becomes `error` and nothing is offered for
-    signing (an issued challenge is never shown, so it expires unused).
+    signing (an issued challenge is never shown, so it expires unused). A
+    request too long to keep whole on record (over 100 turns or 50,000
+    characters) is stopped before drafting, and its record keeps the newest
+    turns that fit, with a count of the ones left out.
 
 What the customer reads is never free LLM text, with one exception. Outcome
 messages are fixed templates, the confirmation is rendered from templates and
@@ -250,12 +253,16 @@ transcript_hash, policy_decision_id, step_up_required}`, valid for 2 minutes.
 A hash that is not SHA-256 hex is `MALFORMED_PLAN`.
 
 The pipeline then files the turn (`Gateway.record_request`). The gateway
-re-parses the record strictly (`MALFORMED_RECORD`) and adds the transcript's
-hash as it computes it. A `confirm` record must name a pending challenge
-(`UNKNOWN_CHALLENGE`), and its transcript and spoken script must hash to that
-challenge's `transcript_hash` and `script_hash` (`RECORD_MISMATCH`). Refusals
-are logged as `RECORD_REFUSED`. So the log holds, next to each challenge, the
-exact conversation and words the customer's signature covers.
+re-parses the record strictly and refuses one over 256 KiB or with text that is
+not valid Unicode (`MALFORMED_RECORD`), then adds the transcript's hash as it
+computes it. A `confirm` record must name a pending challenge
+(`UNKNOWN_CHALLENGE`) that has no record yet (`RECORD_EXISTS`), and its plan,
+transcript and spoken script must hash to that challenge's `plan_hash`,
+`transcript_hash` and `script_hash` (`RECORD_MISMATCH`). Refusals are logged as
+`RECORD_REFUSED`. A challenge that carries a `transcript_hash` does not execute
+until its record is filed (below), so the log holds, next to each such
+challenge, the exact conversation, plan and words the customer's signature
+covers.
 
 The device signs `crypto.challenge_digest(challenge)`, the SHA-256 of the
 canonical challenge JSON. In the web demo the browser shows the confirmation,
@@ -268,7 +275,10 @@ verification required) to sign; until a passkey is enrolled, a key labelled
 1. Approval checks, each with its own error code: a signature is attached, the
    nonce is unused, the challenge exists and has not expired, the signature is
    from the registered device, the plan hash matches (if the caller sent a
-   plan), and the step-up code is right (if the challenge requires one).
+   plan), the step-up code is right (if the challenge requires one), and a
+   challenge bound to a conversation has its record on file
+   (`RECORD_REQUIRED`; the approval is not used up, so it can go through once
+   the record is filed).
 2. The nonce is consumed, whatever happens next.
 3. The gateway takes its own stored copy of the plan, re-simulates it against
    live balances and quotes, and re-runs the risk rules.
@@ -298,14 +308,14 @@ becomes `INTERNAL_ERROR`, and no money moves.
 | I14 | Every amount, fraction, payee, biller, destination account and stock in a draft traces to the customer's own words. | `Pipeline._check_provenance`; `numbers.py`; `context.payee_is_mentioned` | done |
 | I15 | The gateway applies the risk rules itself, when it issues a challenge and again at execution; deny and hold stop there whatever the control plane decided. | `Gateway._check_policy` | done |
 | I16 | A step-up decision needs a second factor bound to that one approval, and three wrong codes void the approval. | `StepUpVerifier` (6-digit HMAC code derived from the nonce); `Gateway._execute` | done in the web demo and benchmark; the gateway service does not enrol a token yet |
-| I17 | A signed approval names the conversation it came from, and the log holds that exact conversation and script. | `transcript_hash` in the signed challenge; `Gateway.record_request` refuses a confirm record whose transcript or spoken script does not hash to the challenge's (`RECORD_MISMATCH`); the pipeline offers nothing until the record is filed | done; the customer's device does not recompute the hash (see below) |
+| I17 | An approval the pipeline asks for names the conversation it came from, and it executes only once the log holds that exact conversation, plan and script. | `transcript_hash` in the signed challenge; `Gateway.record_request` files one confirm record per challenge and refuses one whose plan, transcript or spoken script does not hash to the challenge's (`RECORD_MISMATCH`); `Gateway._execute` refuses a challenge with a `transcript_hash` and no record (`RECORD_REQUIRED`) | done for every challenge the pipeline asks for; a direct caller can still ask for one without a `transcript_hash`, and the device does not recompute the hash (see below) |
 
 ## Gateway error codes
 
 | Code | HTTP | Attack it stops |
 |---|---|---|
 | `MALFORMED_PLAN` | 400 | sub-cent or NaN amounts, broken text, equity fields on the wrong step, a challenge hash that is not SHA-256 hex |
-| `MALFORMED_RECORD` | 400 | a turn record that does not parse (truncated, or carrying a field the schema does not have) |
+| `MALFORMED_RECORD` | 400 | a turn record that does not parse (truncated, carrying a field the schema does not have, text that is not valid Unicode) or is over 256 KiB (flooding the log) |
 | `SIGNATURE_REQUIRED` | 401 | agent executes without asking the customer |
 | `SIGNATURE_INVALID` | 401 | agent signs with its own key |
 | `STEP_UP_REQUIRED` | 401 | approving a high-risk plan without the customer's digital token |
@@ -316,7 +326,9 @@ becomes `INTERNAL_ERROR`, and no money moves.
 | `NONCE_CONSUMED` | 409 | replaying an old approval |
 | `DEVICE_ALREADY_REGISTERED` | 409 | agent enrolling its own key as the customer's device |
 | `QUOTE_EXPIRED` | 409 | executing a share buy at a stale price |
-| `RECORD_MISMATCH` | 409 | filing a different conversation or script from the one the customer signed for |
+| `RECORD_EXISTS` | 409 | filing a second, different account of a turn that is already on record |
+| `RECORD_MISMATCH` | 409 | filing a different plan, conversation or script from the one the customer signed for |
+| `RECORD_REQUIRED` | 409 | executing a conversation-bound approval whose conversation was never filed |
 | `STALE_PLAN` | 409 | displayed destination differs from bank records ("show Mum, pay someone else"); plan for another customer; plan no longer matches live accounts, payees or quotes; risk rose to step-up after approval |
 | `CHALLENGE_EXPIRED` | 410 | using an approval after its window |
 | `INSUFFICIENT_FUNDS` | 422 | balances changed since approval |
@@ -386,13 +398,17 @@ money moving before the audit write, and unaudited non-gateway errors.
   words shown relies on the control plane being honest. Likewise, the
   customer's device does not recompute `transcript_hash` from the chat it
   showed: the hash proves which conversation an approval came from, not that
-  the conversation is genuine.
+  the conversation is genuine. The gateway enforces the record only for a
+  challenge that carries a `transcript_hash`; the CLI demo, the gateway's `/dev`
+  page and the web demo's attack panel ask for challenges without one, so a
+  compromised agent could too (the customer still has to sign it).
 - `REQUEST` entries are the control plane's account of each turn. The gateway
   checks their shape and, for a `confirm`, the two hashes, but cannot check
   that the drafts, trace or outcome are true. They hold the customer's own
   words, so a real deployment would apply the bank's retention and access rules
-  to them. The web demo keeps the log in memory; the gateway service can also
-  append it to a JSONL file (`--audit-path`).
+  to them. Records are capped at 256 KiB each, but `/requests` is not
+  rate-limited. The web demo keeps the log in memory; the gateway service can
+  also append it to a JSONL file (`--audit-path`).
 - Without an API key, both roles run the same `OfflineLLM`, so the validator is
   not independent. Rogue mode is still caught, because it corrupts only the
   drafter. With real models, the validator should be a different family (see

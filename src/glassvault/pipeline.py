@@ -45,6 +45,8 @@ from .schema import (
     Challenge,
     Clarification,
     ClarifyOption,
+    MAX_RECORD_CHARS,
+    MAX_RECORD_TURNS,
     ConfirmationView,
     DiffLine,
     Enquiry,
@@ -76,6 +78,7 @@ MSG_HELD = "For your protection this is on hold and nothing has been sent: {reas
 MSG_REFUSED = "I can't do this: {reasons}"
 MSG_CONFIRM = "Please check the details and confirm with Face ID."
 MSG_ERROR = "Sorry, I couldn't process that. Nothing has been sent. Could you say it another way?"
+MSG_TOO_LONG = "This conversation has got too long for me to follow safely. Nothing has been sent. Please start again."
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,10 @@ class Pipeline:
         trace: list[TraceEvent] = []
         drafts = _Drafts()
         try:
+            if len(dialogue) > MAX_RECORD_TURNS or sum(len(t.text) for t in dialogue) > MAX_RECORD_CHARS:
+                # Too long to keep whole on record, so nothing from it may be signed.
+                trace.append(TraceEvent("current-request", False, f"{len(dialogue)} turns: too long to keep on record"))
+                raise _Stop("error", MSG_TOO_LONG)
             outcome = self._handle(dialogue, drafter, validator, trace, drafts)
         except _Stop as stop:
             outcome = Outcome(stop.kind, stop.message, trace=tuple(trace),
@@ -226,8 +233,12 @@ class Pipeline:
     def _record(self, dialogue: Sequence[Turn], outcome: Outcome, drafts: _Drafts) -> None:
         """File this turn in the gateway's audit log as a REQUEST entry (see RequestRecord)."""
         diff = outcome.diff.diffs if outcome.diff else None
+        kept = list(dialogue)
+        while len(kept) > MAX_RECORD_TURNS or sum(len(t.text) for t in kept) > MAX_RECORD_CHARS:
+            kept.pop(0)  # only a stopped turn gets here: a confirm's transcript is always within the limits
         self._gateway.record_request(RequestRecord(
-            transcript=tuple(dialogue),
+            transcript=tuple(kept),
+            transcript_dropped=len(dialogue) - len(kept),
             outcome=outcome.kind,
             message=outcome.message[:4000],
             nonce=outcome.challenge.nonce if outcome.challenge else None,

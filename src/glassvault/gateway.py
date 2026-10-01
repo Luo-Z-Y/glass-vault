@@ -11,8 +11,9 @@ The agent can ask for a challenge and submit a plan, but:
 - Execution needs the customer's registered device to have signed that exact
   challenge, once, before it expires. Enrolment is write-once.
 - The control plane files every customer turn it handles as a REQUEST entry.
-  The gateway only records it, except that a confirm record's transcript and
-  spoken script must hash to what the signed challenge carries.
+  The gateway only records it, except that a confirm record's plan, transcript
+  and spoken script must hash to what the signed challenge carries, and a
+  challenge bound to a conversation does not execute until that record is filed.
 
 Every failure has its own code so the demo, the audit log and the benchmark
 can show which defence stopped which attack.
@@ -33,10 +34,10 @@ from typing import Any, Protocol
 
 from .audit import AuditEntry, AuditLog
 from .bank import Bank, Market, share_cost
-from .crypto import challenge_digest, plan_hash, sha256_hex, transcript_hash, verify_signature
+from .crypto import canonical_bytes, challenge_digest, plan_hash, sha256_hex, transcript_hash, verify_signature
 from .evaluator import destination_label
 from .policy import evaluate_policy
-from .schema import Challenge, PolicyDecision, RequestRecord, ResolvedPlan, ResolvedStep
+from .schema import MAX_RECORD_BYTES, Challenge, PolicyDecision, RequestRecord, ResolvedPlan, ResolvedStep
 from .stepup import MAX_ATTEMPTS, StepUpVerifier
 
 PolicyFn = Callable[..., PolicyDecision]
@@ -54,7 +55,9 @@ STATUS = {
     "DEVICE_ALREADY_REGISTERED": 409,
     "NONCE_CONSUMED": 409,
     "QUOTE_EXPIRED": 409,
+    "RECORD_EXISTS": 409,
     "RECORD_MISMATCH": 409,
+    "RECORD_REQUIRED": 409,
     "STALE_PLAN": 409,
     "CHALLENGE_EXPIRED": 410,
     "INSUFFICIENT_FUNDS": 422,
@@ -128,7 +131,7 @@ class DeviceKeyVerifier:
         return key is not None and isinstance(proof, bytes) and verify_signature(key, proof, message)
 
 
-_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def _safe_plan_hash(plan: Any) -> str:
@@ -169,6 +172,7 @@ class Gateway:
         self._lock = threading.RLock()
         self._pending: dict[str, _Pending] = {}
         self._consumed: set[str] = set()
+        self._recorded: set[str] = set()  # nonces whose confirm REQUEST is on file
         self._receipt_ids = itertools.count(1)
         self._executions: list[Execution] = []
         # Quotes are stamped with the gateway's clock, never a caller-supplied time.
@@ -230,7 +234,7 @@ class Gateway:
             now = self._clock()
             try:
                 for name, value in (("script_hash", script_hash), ("transcript_hash", transcript_hash)):
-                    if value is not None and not (isinstance(value, str) and _SHA256_HEX.match(value)):
+                    if value is not None and not (isinstance(value, str) and _SHA256_HEX.fullmatch(value)):
                         raise GatewayError("MALFORMED_PLAN", f"{name} must be 64 lowercase hex characters")
                 checked = self._check_plan(plan)
                 self._simulate(checked, now)
@@ -263,11 +267,12 @@ class Gateway:
         """File one customer turn the control plane handled, as a REQUEST audit entry.
 
         The record is the control plane's account and decides nothing here. It is
-        re-parsed strictly, and the entry adds the transcript's hash as the gateway
-        computes it. A confirm record must name a pending challenge whose
-        `transcript_hash` and `script_hash` match its transcript and spoken script,
-        so the log holds the exact conversation and words the customer signed for.
-        Refusals are audited as RECORD_REFUSED.
+        re-parsed strictly and must fit in MAX_RECORD_BYTES, and the entry adds the
+        transcript's hash as the gateway computes it. A confirm record must name a
+        pending challenge that has no record yet, and its plan, transcript and
+        spoken script must hash to that challenge's `plan_hash`, `transcript_hash`
+        and `script_hash`: the log then holds the exact conversation, plan and words
+        the customer signed for. Refusals are audited as RECORD_REFUSED.
         """
         with self._lock:
             now = self._clock()
@@ -276,9 +281,13 @@ class Gateway:
                 try:
                     data = record.model_dump(mode="json") if hasattr(record, "model_dump") else record
                     checked = RequestRecord.model_validate(data)
+                    entry = checked.model_dump(mode="json")
+                    size = len(canonical_bytes(entry))  # also proves the entry can be hashed into the chain
+                    hashed = transcript_hash(checked.transcript)
                 except Exception as e:
                     raise GatewayError("MALFORMED_RECORD", "the request record does not parse") from e
-                hashed = transcript_hash(checked.transcript)
+                if size > MAX_RECORD_BYTES:
+                    raise GatewayError("MALFORMED_RECORD", f"the request record is over {MAX_RECORD_BYTES} bytes")
                 if checked.nonce is not None:
                     self._check_record(checked, hashed)
             except GatewayError as e:
@@ -286,16 +295,21 @@ class Gateway:
                     "RECORD_REFUSED", {"code": e.code, "nonce": nonce if isinstance(nonce, str) else None}, at=now
                 )
                 raise
-            return self._audit.append(
-                "REQUEST", {**checked.model_dump(mode="json"), "transcript_hash": hashed}, at=now
-            )
+            filed = self._audit.append("REQUEST", {**entry, "transcript_hash": hashed}, at=now)
+            if checked.nonce is not None:
+                self._recorded.add(checked.nonce)
+            return filed
 
     def _check_record(self, record: RequestRecord, hashed: str) -> None:
-        """A confirm record must match the pending challenge it names."""
+        """A confirm record must be the first for a pending challenge, and match what it signs."""
         pending = self._pending.get(record.nonce)
         if pending is None:
             raise GatewayError("UNKNOWN_CHALLENGE", "no pending challenge has this nonce")
+        if record.nonce in self._recorded:
+            raise GatewayError("RECORD_EXISTS", "this challenge already has its record")
         challenge = pending.challenge
+        if record.plan is None or plan_hash(record.plan) != challenge.plan_hash:
+            raise GatewayError("RECORD_MISMATCH", "the plan does not hash to the challenge's plan_hash")
         if challenge.transcript_hash != hashed:
             raise GatewayError("RECORD_MISMATCH", "the transcript does not hash to the challenge's transcript_hash")
         script = record.confirmation.spoken_script if record.confirmation else None
@@ -368,6 +382,10 @@ class Gateway:
                     self._consumed.add(nonce)
                     raise GatewayError("STEP_UP_LOCKED", "too many wrong token codes; this approval is void")
                 raise GatewayError("STEP_UP_REQUIRED", "enter the code from your digital token")
+        # A challenge bound to a conversation runs only once that conversation is on file. Checked
+        # last, and before the nonce is used up, so a late record can still let the approval through.
+        if challenge.transcript_hash is not None and nonce not in self._recorded:
+            raise GatewayError("RECORD_REQUIRED", "the conversation behind this approval is not on record")
 
         # The approval is genuine: it is used up now, whether or not execution succeeds.
         del self._pending[nonce]

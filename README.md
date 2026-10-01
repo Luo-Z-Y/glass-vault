@@ -22,7 +22,7 @@ switch the AI to rogue mode and show it still cannot move a cent.
 
 ```bash
 uv sync
-uv run pytest                          # ~1,080 tests
+uv run pytest                          # ~1,150 tests
 uv run python -m glassvault.demo       # CLI: signed happy path + 6 blocked attacks
 uv run python -m glassvault.web.server # web demo on http://localhost:8000
 uv run python -i scripts/playground.py # try to rob the gateway yourself

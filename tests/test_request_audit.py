@@ -1,6 +1,7 @@
 """Every customer turn is on record (REQUEST), and the signature covers the conversation (transcript_hash)."""
 
 import hashlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -106,7 +107,7 @@ def test_the_via_flag_is_part_of_the_hash():
 
 
 @pytest.mark.parametrize("field", ["script_hash", "transcript_hash"])
-@pytest.mark.parametrize("value", ["abc", "AB" * 32, "zz" * 32, "ab" * 33])
+@pytest.mark.parametrize("value", ["abc", "AB" * 32, "zz" * 32, "ab" * 33, "ab" * 32 + "\n"])
 def test_a_challenge_hash_must_be_sha256_hex(gateway, audit, bank, clock, brief_plan, field, value):
     plan = resolve(brief_plan, bank.view(), now=clock.now)
     with pytest.raises(GatewayError) as e:
@@ -126,8 +127,17 @@ def confirmed(pipeline, audit):
     return o, record
 
 
-def test_a_record_must_match_the_conversation_the_customer_signed_for(gateway, audit, confirmed):
-    _, record = confirmed
+@pytest.fixture
+def unfiled(gateway, confirmed):
+    """The same record, naming a second challenge over the same plan and hashes that has no record yet."""
+    o, record = confirmed
+    again = gateway.issue_challenge(o.plan, script_hash=o.challenge.script_hash,
+                                    transcript_hash=o.challenge.transcript_hash)
+    return again, record.model_copy(update={"nonce": again.nonce})
+
+
+def test_a_record_must_match_the_conversation_the_customer_signed_for(gateway, audit, unfiled):
+    _, record = unfiled
     forged = record.model_copy(update={"transcript": (said("Send mum 3000 for groceries"),)})
     with pytest.raises(GatewayError) as e:
         gateway.record_request(forged)
@@ -135,12 +145,31 @@ def test_a_record_must_match_the_conversation_the_customer_signed_for(gateway, a
     assert audit.entries[-1].kind == "RECORD_REFUSED" and audit.entries[-1].data["code"] == "RECORD_MISMATCH"
 
 
-def test_a_record_must_match_the_words_the_customer_heard(gateway, confirmed):
-    _, record = confirmed
+def test_a_record_must_match_the_words_the_customer_heard(gateway, unfiled):
+    _, record = unfiled
     script = record.confirmation.model_copy(update={"spoken_script": "You are sending three dollars."})
     with pytest.raises(GatewayError) as e:
         gateway.record_request(record.model_copy(update={"confirmation": script}))
     assert e.value.code == "RECORD_MISMATCH"
+
+
+def test_a_record_must_hold_the_plan_the_customer_signed(gateway, bank, clock, unfiled):
+    _, record = unfiled
+    bigger = record.plan.model_copy(update={"steps": tuple(
+        s.model_copy(update={"amount": s.amount * 10}) for s in record.plan.steps)})
+    for plan in (bigger, None):
+        with pytest.raises(GatewayError) as e:
+            gateway.record_request(record.model_copy(update={"plan": plan}))
+        assert e.value.code == "RECORD_MISMATCH"
+    gateway.record_request(record)  # the true record is still accepted
+
+
+def test_a_challenge_gets_one_record(gateway, audit, confirmed):
+    _, record = confirmed
+    with pytest.raises(GatewayError) as e:
+        gateway.record_request(record)
+    assert e.value.code == "RECORD_EXISTS"
+    assert len(requests(audit)) == 1
 
 
 def test_a_record_cannot_name_a_challenge_that_was_never_issued(gateway, confirmed):
@@ -167,6 +196,52 @@ def test_a_malformed_record_is_refused_and_audited(gateway, audit, bad):
     assert audit.entries[-1].kind == "RECORD_REFUSED"
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_a_record_that_cannot_go_into_the_log_is_refused(gateway, audit):
+    huge = {"reason": "missing_info", "question": "A" * 300_000}
+    for bad in (
+        {"transcript": (), "outcome": "clarify", "message": "x", "clarification": huge},  # too big
+        {"transcript": (), "outcome": "clarify", "message": "x",  # not text, so it cannot be hashed
+         "clarification": {"reason": "missing_info", "question": "which one? \ud800"}},
+    ):
+        with pytest.raises(GatewayError) as e:
+            gateway.record_request(RequestRecord.model_construct(**bad))
+        assert e.value.code == "MALFORMED_RECORD" and audit.entries[-1].kind == "RECORD_REFUSED"
+    assert audit.first_broken() is None
+
+
+def test_text_that_is_not_valid_unicode_never_becomes_a_turn():
+    with pytest.raises(ValidationError):
+        said("Send mum 300 \ud800")
+
+
+# --- A challenge bound to a conversation executes only once that conversation is on record --------
+
+
+def test_an_approval_waits_for_its_record(gateway, phone, bank, unfiled):
+    challenge, record = unfiled
+    signature = phone.sign(challenge_digest(challenge))
+    with pytest.raises(GatewayError) as e:
+        gateway.execute(nonce=challenge.nonce, signature=signature)
+    assert e.value.code == "RECORD_REQUIRED"
+    balance = bank.accounts["SAV"].balance
+
+    gateway.record_request(record)  # the approval was not used up, so it goes through once filed
+    gateway.execute(nonce=challenge.nonce, signature=signature)
+    assert bank.accounts["SAV"].balance == balance - 300
+
+
+def test_a_challenge_without_a_conversation_executes_as_before(gateway, phone, bank, clock, brief_plan):
+    challenge = gateway.issue_challenge(resolve(brief_plan, bank.view(), now=clock.now))
+    assert challenge.transcript_hash is None
+    assert gateway.execute(nonce=challenge.nonce, signature=phone.sign(challenge_digest(challenge)))
+
+
+def test_the_pipelines_approvals_execute(pipeline, gateway, phone):
+    o = pipeline.handle([said("Send mum 300 for groceries")])
+    assert gateway.execute(nonce=o.challenge.nonce, signature=phone.sign(challenge_digest(o.challenge)))
+
+
 # --- No record, no offer -----------------------------------------------------------------------
 
 
@@ -180,6 +255,17 @@ def test_a_turn_that_cannot_be_filed_offers_nothing_to_sign(bank, gateway):
     o = Pipeline(_UnrecordedPort(gateway), llm, llm).handle([said("Send mum 300 for groceries")])
     assert o.kind == "error" and o.challenge is None and o.plan is None
     assert o.trace[-1].stage == "audit" and not o.trace[-1].ok and "ConnectionError" in o.trace[-1].detail
+
+
+def test_a_conversation_too_long_to_record_whole_is_stopped_and_recorded(pipeline, audit):
+    dialogue = []
+    for _ in range(60):
+        dialogue += [said("send John fifty"), Turn(role="agent", text="Which John do you mean?")]
+    o = pipeline.handle(dialogue)
+    assert o.kind == "error" and o.challenge is None and o.llm_calls == 0
+    [record] = requests(audit)
+    assert record["outcome"] == "error" and record["transcript_dropped"] == 20
+    assert len(record["transcript"]) == 100
 
 
 def test_an_unexpected_failure_is_still_on_record(pipeline, audit, monkeypatch):
@@ -208,9 +294,14 @@ def test_the_gateway_service_files_turns_from_the_agent_service(bank, audit, clo
     [record] = requests(audit)
     assert record["nonce"] == o.challenge.nonce
 
-    response = http.post("/requests", json={"transcript": [], "outcome": "confirm", "message": "x"})
-    assert response.status_code == 422 and response.json()["code"] == "INVALID_REQUEST"
-    assert audit.entries[-1].kind == "REQUEST_REFUSED"
+    for body in (
+        {"transcript": [], "outcome": "confirm", "message": "x"},
+        {"transcript": [{"role": "customer", "text": "hi \ud800"}], "outcome": "frozen", "message": "x"},
+    ):
+        response = http.post("/requests", content=json.dumps(body), headers={"content-type": "application/json"})
+        assert response.status_code == 422 and response.json()["code"] == "INVALID_REQUEST"
+        assert audit.entries[-1].kind == "REQUEST_REFUSED"
+    assert audit.first_broken() is None
 
 
 def test_the_record_hashes_are_plain_sha256(confirmed):
