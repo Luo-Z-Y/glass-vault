@@ -122,10 +122,10 @@ flowchart TB
             g_gateway["🏦 Gateway<br/>gateway.py · audit.py<br/>crypto.py · stepup.py"]
             g_shared["🔗 Shared models<br/>schema.py · bank.py"]
             g_services["📁 services/<br/>gateway_api.py<br/>webauthn_verifier.py<br/>static/dev.html"]
-            g_web["📁 web/ · demo server<br/>server.py<br/>+ voice.py (TRTC)"]
+            g_web["📁 web/ · demo server<br/>server.py"]
             g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css · pcm-recorder.js"]
             g_evals["📁 evals/ · harness<br/>harness.py · dataset.py<br/>naive.py · __main__.py"]
-            g_demo["🎭 Demo + rogue AI<br/>demo.py · rogue.py"]
+            g_demo["🎭 Demo, rogue AI, voice<br/>demo.py · rogue.py<br/>voice.py (TRTC)"]
             g_agent ~~~ g_shared ~~~ g_evals
             g_control ~~~ g_services ~~~ g_demo
             g_gateway ~~~ g_web ~~~ g_static
