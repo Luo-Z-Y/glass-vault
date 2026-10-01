@@ -267,6 +267,7 @@ async function showPending(body) {
   const c = body.challenge;
   $("meta").textContent = `nonce ${c.nonce} | expires ${c.expires_at}` +
     (c.script_hash ? ` | script ${c.script_hash.slice(0, 12)}…` : "") +
+    (c.transcript_hash ? ` | transcript ${c.transcript_hash.slice(0, 12)}…` : "") +
     (c.policy_decision_id ? ` | policy ${c.policy_decision_id}` : "");
   $("pending").hidden = false;
   $("result").replaceChildren();

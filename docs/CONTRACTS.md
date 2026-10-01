@@ -2,7 +2,8 @@
 
 Shared models live in `src/glassvault/schema.py`: `Plan` (LLM draft), `ResolvedPlan`
 (what is signed), `Challenge`, `Turn`, `Clarification`/`ClarifyOption`,
-`PolicyDecision`/`PolicyReason`, `ConfirmationView`. A draft amount is a
+`PolicyDecision`/`PolicyReason`, `ConfirmationView`, `Enquiry`/`EnquiryAnswer`,
+and `RequestRecord` (one handled turn, filed in the audit log as `REQUEST`). A draft amount is a
 `FixedAmount`, a `FractionOfStep` ("half of it") or a `FractionOfBalance` ("a
 quarter of my savings"). The mock bank is `bank.py` (`Bank`, `BankView`,
 `seed_bank`, `share_cost`). Amounts are always `Decimal`.
@@ -162,7 +163,9 @@ class GatewayPort(Protocol):   # all the pipeline may ask of the gateway; there 
     def view(self) -> BankView
     def history(self, since: datetime | None = None) -> Sequence[Execution]
     def issue_challenge(self, plan: ResolvedPlan, *, script_hash: str | None = None,
+                        transcript_hash: str | None = None,
                         policy_decision_id: str | None = None) -> Challenge
+    def record_request(self, record: RequestRecord) -> Any     # files one handled turn as REQUEST
 
 class LocalGatewayPort: ...    # LocalGatewayPort(gateway): in-process port (web demo, benchmark)
 
@@ -171,7 +174,7 @@ class TraceEvent: stage: str; ok: bool; detail: str
 
 @dataclass(frozen=True)
 class Outcome:
-    kind: Literal["confirm", "clarify", "frozen", "refused", "held", "error"]
+    kind: Literal["confirm", "clarify", "answer", "frozen", "refused", "held", "error"]
     message: str                           # a fixed template, or the clarifying question
     plan: ResolvedPlan | None = None
     clarification: Clarification | None = None
@@ -179,12 +182,16 @@ class Outcome:
     policy: PolicyDecision | None = None
     challenge: Challenge | None = None     # set when kind == "confirm"
     diff: PlanDiff | None = None           # set when the validator disagreed
+    answer: EnquiryAnswer | None = None    # set when kind == "answer"
     trace: tuple[TraceEvent, ...] = ()
     llm_calls: int = 0
 
 class Pipeline:
     def __init__(self, gateway: GatewayPort, drafter_llm: LLM, validator_llm: LLM)
     def handle(self, dialogue: Sequence[Turn]) -> Outcome
+    # files every turn with the gateway (RequestRecord) before returning; a stopped turn whose
+    # full record cannot be filed is filed abridged; if a confirm cannot be filed whole, the
+    # outcome is "error" and nothing is offered for signing
 
 def agent_factory(bank, gateway, attack, *, drafter_llm=None, validator_llm=None)
     # Glass Vault as an evals AgentFactory; with `attack`, the drafter is a RogueLLM
@@ -202,10 +209,15 @@ class Gateway:
     def history(self, since: datetime | None = None) -> tuple[Execution, ...]
     def register_device(self, customer_id: str, public_key: bytes) -> None       # write-once
     def issue_challenge(self, plan: ResolvedPlan, *, script_hash: str | None = None,
-                        policy_decision_id: str | None = None) -> Challenge
+                        transcript_hash: str | None = None,
+                        policy_decision_id: str | None = None) -> Challenge   # hashes: SHA-256 hex
+    def record_request(self, record: RequestRecord) -> AuditEntry
+        # REQUEST entry, at most 256 KiB; a confirm record is the first for its pending challenge
+        # and must match its plan_hash, transcript_hash and script_hash
     def pending_plan(self, nonce: str) -> ResolvedPlan | None                   # the gateway's own copy
     def execute(self, plan: ResolvedPlan | None = None, *, nonce: str | None = None,
                 signature: Any = None, step_up_code: str | None = None) -> list[Receipt]
+        # a challenge with a transcript_hash needs its confirm record on file (RECORD_REQUIRED)
 
 class GatewayError(Exception): code: str; status: int; message: str   # codes and statuses in STATUS
 @dataclass(frozen=True)
@@ -220,6 +232,7 @@ class DeviceKeyVerifier: ...   # raw Ed25519 device keys (CLI demo, benchmark, t
 # crypto.py
 def canonical_bytes(obj: Any) -> bytes               # sorted keys, no whitespace, Decimals as strings
 def plan_hash(plan: ResolvedPlan) -> str             # sha256 hex of the canonical plan
+def transcript_hash(turns: Sequence[Turn]) -> str    # sha256 hex of the turns (role, text, via)
 def challenge_digest(challenge: Challenge) -> bytes  # what the customer's device signs
 class DeviceKey:                                     # stands in for the passkey outside the web app
     public_bytes: bytes
@@ -254,6 +267,7 @@ Each gateway error code and the attack it stops are listed in
     agent), `POST /quotes`, `GET /history`, `GET /audit`
   - approval: `POST /challenges`, `POST /webauthn/approve/options` (returns the
     gateway's own copy of the plan), `POST /execute`
+  - audit: `POST /requests` (the agent service files each turn it handled)
   - enrolment: `POST /webauthn/register/options|verify` (both need the one-time
     enrolment code shown on the gateway's console), `GET /webauthn/passkeys`
   - dev: `GET /dev` (passkey test page), and `POST /dev/sample-challenge` with `dev_tools`

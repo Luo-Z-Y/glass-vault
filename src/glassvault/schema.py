@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Union
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # "t1" to "t99", numbered in the order the customer said the steps.
 StepId = Annotated[str, Field(pattern=r"^t[1-9][0-9]?$")]
@@ -215,6 +215,9 @@ class Challenge(_Frozen):
     script_hash: str | None = Field(
         default=None, description="sha256 of the confirmation script the customer saw/heard"
     )
+    transcript_hash: str | None = Field(
+        default=None, description="sha256 of the conversation this approval came from (crypto.transcript_hash)"
+    )
     policy_decision_id: str | None = None
     step_up_required: bool = Field(
         default=False, description="the gateway's own risk check wants a second factor for this approval"
@@ -228,6 +231,16 @@ class Turn(_Frozen):
     role: Literal["customer", "agent"]
     text: str
     via: Literal["text", "voice"] = "text"  # voice turns may contain speech-to-text slips
+
+    @field_validator("text")
+    @classmethod
+    def _encodable(cls, text: str) -> str:
+        # A lone surrogate is not text: it cannot be hashed into a challenge or written to the log.
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError as e:
+            raise ValueError("text is not valid Unicode") from e
+        return text
 
 
 class ClarifyOption(_Frozen):
@@ -290,3 +303,73 @@ class EnquiryAnswer(_Frozen):
 
     lines: tuple[str, ...]
     spoken_script: str
+
+
+# --- Audit records ------------------------------------------------------------
+
+OutcomeKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held", "error"]
+# A record past these limits is refused; the pipeline stops a conversation before it gets there.
+MAX_RECORD_TURNS = 100
+MAX_RECORD_CHARS = 50_000
+MAX_RECORD_BYTES = 256 * 1024
+
+
+class TraceLine(_Frozen):
+    """One stage of the control plane's trace, as the audit log stores it."""
+
+    stage: str = Field(max_length=40)
+    ok: bool
+    detail: str = Field(max_length=4000)
+
+
+class DiffLine(_Frozen):
+    """One difference between the draft and the validator's reading, as the audit log stores it."""
+
+    kind: Literal["missing", "extra", "changed"]
+    step: str = Field(max_length=40)
+    detail: str = Field(max_length=1000)
+
+
+class RequestRecord(_Frozen):
+    """One customer turn as the control plane handled it, filed in the gateway's audit log as REQUEST.
+
+    Written for every outcome, so requests the control plane stopped (frozen,
+    refused, held) are on record next to the ones that reached a challenge. It
+    is the control plane's account of the turn; the gateway checks that a
+    confirm record's plan, transcript and spoken script hash to what the signed
+    challenge carries. A stopped turn whose full record cannot be filed is filed
+    `abridged`: its outcome, its trace and the newest turns that fit.
+    """
+
+    transcript: tuple[Turn, ...] = Field(
+        max_length=MAX_RECORD_TURNS, description="the turns of this request, with their via flag"
+    )
+    transcript_dropped: int = Field(
+        default=0, ge=0, description="oldest turns left out to fit the limits; never on a confirm record"
+    )
+    abridged: bool = Field(default=False, description="the full record could not be filed; never on a confirm record")
+    outcome: OutcomeKind
+    message: str = Field(max_length=4000, description="what the customer was told")
+    nonce: str | None = Field(default=None, max_length=64, description="confirm only: the challenge issued")
+    draft: Plan | Clarification | Enquiry | None = Field(default=None, description="the drafter's output, unchecked")
+    check: Plan | Clarification | None = Field(default=None, description="the validator's own reading, if awaited")
+    plan: ResolvedPlan | None = None
+    diff: tuple[DiffLine, ...] | None = Field(default=None, max_length=200)
+    policy: PolicyDecision | None = None
+    clarification: Clarification | None = None
+    confirmation: ConfirmationView | None = None
+    answer: EnquiryAnswer | None = None
+    trace: tuple[TraceLine, ...] = Field(default=(), max_length=50)
+    drafter: str | None = Field(default=None, max_length=200, description="the drafter model's name")
+    validator: str | None = Field(default=None, max_length=200, description="the validator model's name")
+    llm_calls: int = Field(default=0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> RequestRecord:
+        if (self.outcome == "confirm") != (self.nonce is not None):
+            raise ValueError("a confirm record names its challenge's nonce, and only a confirm record does")
+        if self.nonce is not None and (self.transcript_dropped or self.abridged):
+            raise ValueError("a confirm record is whole: the transcript its challenge was hashed over, and the rest")
+        if sum(len(t.text) for t in self.transcript) > MAX_RECORD_CHARS:
+            raise ValueError("transcript too long")
+        return self

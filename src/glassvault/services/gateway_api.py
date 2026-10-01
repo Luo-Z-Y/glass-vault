@@ -2,8 +2,9 @@
 
 The agent zone is assumed compromised, so this service gives it nothing that
 moves money. The agent can read a snapshot (``/view``), fetch share quotes and
-execution history, ask for a challenge over a plan, and pass the customer's
-passkey assertion on to ``/execute``. Every ledger write still goes through
+execution history, ask for a challenge over a plan, file each customer turn it
+handled in the audit log (``/requests``), and pass the customer's passkey
+assertion on to ``/execute``. Every ledger write still goes through
 ``Gateway.execute``, which checks the signed challenge.
 
 Choices worth knowing:
@@ -58,7 +59,16 @@ from ..bank import Account, Bank, BankView, Biller, PastPayment, Payee, Quote, s
 from ..crypto import challenge_digest
 from ..evaluator import EvaluationError, resolve
 from ..gateway import STATUS, Execution, Gateway, GatewayError, Receipt
-from ..schema import BillPayment, Challenge, FixedAmount, OwnTransfer, Plan, ResolvedPlan, ResolvedStep
+from ..schema import (
+    BillPayment,
+    Challenge,
+    FixedAmount,
+    OwnTransfer,
+    Plan,
+    RequestRecord,
+    ResolvedPlan,
+    ResolvedStep,
+)
 from .webauthn_verifier import EnrolmentError, WebAuthnVerifier, approval_options
 
 DEFAULT_RP_ID = "localhost"
@@ -85,6 +95,7 @@ class ChallengeRequest(_Wire):
 
     plan: ResolvedPlan
     script_hash: str | None = Field(default=None, max_length=128)
+    transcript_hash: str | None = Field(default=None, max_length=128)
     policy_decision_id: str | None = Field(default=None, max_length=128)
 
 
@@ -513,7 +524,15 @@ def create_gateway_app(
     def challenges(req: ChallengeRequest) -> dict[str, Any]:
         """Have the gateway check a plan and issue a challenge for the customer to sign."""
         # The gateway validates the plan (labels, live balances) and audits refusals.
-        return issue(req.plan, script_hash=req.script_hash, policy_decision_id=req.policy_decision_id)
+        return issue(req.plan, script_hash=req.script_hash, transcript_hash=req.transcript_hash,
+                     policy_decision_id=req.policy_decision_id)
+
+    @app.post("/requests")
+    def requests(record: RequestRecord) -> dict[str, Any]:
+        """File one customer turn the control plane handled as a REQUEST audit entry (see ``RequestRecord``)."""
+        with lock:
+            entry = gateway.record_request(record)
+        return {"seq": entry.seq, "hash": entry.hash}
 
     @app.post("/webauthn/approve/options")
     def approve_options(req: NonceRequest) -> dict[str, Any]:
@@ -658,7 +677,8 @@ class GatewayClient:
     """The agent service's only route to the gateway. It holds nothing that moves money.
 
     Implements ``pipeline.GatewayPort`` (``now``, ``view``, ``history``,
-    ``issue_challenge``) over HTTP, plus ``execute`` for relaying an approval.
+    ``issue_challenge``, ``record_request``) over HTTP, plus ``execute`` for
+    relaying an approval.
     """
 
     def __init__(self, http: Any):
@@ -706,24 +726,31 @@ class GatewayClient:
         )
 
     def request_challenge(
-        self, plan: ResolvedPlan, *, script_hash: str | None = None, policy_decision_id: str | None = None
+        self, plan: ResolvedPlan, *, script_hash: str | None = None, transcript_hash: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> IssuedChallenge:
         """Ask for a challenge over `plan`; the reply also carries the passkey prompt for the device."""
         body = {
             "plan": plan.model_dump(mode="json"),
             "script_hash": script_hash,
+            "transcript_hash": transcript_hash,
             "policy_decision_id": policy_decision_id,
         }
         data = self._call("POST", "/challenges", json=body)
         return IssuedChallenge(Challenge.model_validate(data["challenge"]), data["webauthn_options"])
 
     def issue_challenge(
-        self, plan: ResolvedPlan, *, script_hash: str | None = None, policy_decision_id: str | None = None
+        self, plan: ResolvedPlan, *, script_hash: str | None = None, transcript_hash: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> Challenge:
         """``GatewayPort``; the device fetches its passkey prompt by nonce (/webauthn/approve/options)."""
         return self.request_challenge(
-            plan, script_hash=script_hash, policy_decision_id=policy_decision_id
+            plan, script_hash=script_hash, transcript_hash=transcript_hash, policy_decision_id=policy_decision_id
         ).challenge
+
+    def record_request(self, record: RequestRecord) -> dict[str, Any]:
+        """``GatewayPort``: file one handled turn; returns the REQUEST entry's ``seq`` and ``hash``."""
+        return self._call("POST", "/requests", json=record.model_dump(mode="json"))
 
     def execute(
         self,

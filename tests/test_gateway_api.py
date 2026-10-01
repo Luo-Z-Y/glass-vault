@@ -522,3 +522,16 @@ def test_sample_challenge_needs_dev_tools(bank, audit, clock):
     http = TestClient(create_gateway_app(gateway))
     assert http.post("/dev/sample-challenge").status_code == 404
     assert http.get("/health").json()["dev_tools"] is False
+
+
+def test_a_passkey_approval_tried_before_its_record_still_counts(http, gw, audit, device, bank, clock):
+    """RECORD_REQUIRED is checked before the passkey assertion, which can be used only once."""
+    plan = resolved(gw, clock, bill())
+    body = challenge_for(http, plan, transcript_hash="ab" * 32)
+    assertion = device.get(body["webauthn_options"])
+    assert_error(execute(http, plan, body["challenge"]["nonce"], assertion), "RECORD_REQUIRED", 409)
+
+    gateway = http.app.state.gateway
+    gateway._recorded.add(body["challenge"]["nonce"])  # stands in for filing the matching record
+    response = execute(http, plan, body["challenge"]["nonce"], assertion)
+    assert response.status_code == 200, response.json()

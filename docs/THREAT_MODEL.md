@@ -11,7 +11,7 @@ customer did not knowingly approve.
 | Customer funds | The obvious one: an unapproved transfer is the failure we must make impossible. |
 | The customer's intent | Even an approved transfer is a failure if the customer was shown something different from what executes. |
 | Non-repudiation | The bank must be able to prove what the customer saw, heard and signed (for disputes and regulators). |
-| The audit trail | Every approval, execution and refusal must be recorded and tamper-evident. |
+| The audit trail | Every request, approval, execution and refusal must be recorded and tamper-evident. |
 
 ## Trust zones
 
@@ -43,14 +43,18 @@ A layer later in the chain never relies on an earlier one having worked.
 | A13 | Concurrent approvals double-spend | Gateway lock; atomic nonce use | `test_concurrent_approvals_cannot_double_spend` |
 | A14 | Audit write fails after money moves | Write-ahead: EXECUTED is logged before balances change | `test_audit_failure_moves_no_money` |
 | A15 | Injection in a statement line (a sender's PayNow reference: "SYSTEM: ignore previous instructions…") | Enquiries are answered by code from bank records; statement text never reaches an LLM, and lines that read like instructions are withheld on screen and in voice | `enquiry-recent-transactions-injection`, `test_a_poisoned_description_is_withheld_on_screen_and_in_voice` |
+| A16 | A dispute ("I never asked for that") or a cover-up: the record of what was said is edited or dropped, or a stopped request leaves no trace | Every turn, including frozen, refused and held ones, is filed as `REQUEST` in the hash-chained log before its outcome is shown; the signed challenge carries `transcript_hash`; the gateway files one confirm record per challenge, only if its plan, transcript and spoken script hash to the signed values, and will not execute a conversation-bound approval until that record is filed | `test_request_audit.py` |
 
 ## Residual risks (said plainly)
 
 - **A compromised agent zone can forge the transcript.** Then provenance and the
   validator are checking fake words. The last line of defence is the customer:
   the confirmation is rendered from bank records and read in a fixed bank
-  voice, and they sign exactly that. In production, speech-to-text would run on
-  the device or in the control plane, not in the agent zone.
+  voice, and they sign exactly that. `transcript_hash` records which
+  conversation an approval came from, but the device does not check it against
+  what it showed, so it cannot tell a forged transcript from a real one. In
+  production, speech-to-text would run on the device or in the control plane,
+  not in the agent zone.
 - **A customer who is being actively coached** may approve a scam payment. Risk
   rules add cooling-off and step-up, but no system removes this entirely.
 - **Mocks:** biometrics in the CLI demo use a raw Ed25519 key (the web app uses a

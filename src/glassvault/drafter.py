@@ -849,6 +849,21 @@ def run_tools(messages: list[dict[str, Any]], llm: LLM, spec: ToolSpec, catalog:
     raise DraftError(f"{llm.name} gave no usable {spec.plan_tool} or {spec.clarify_tool} call after a repair round", errors)
 
 
+def _invalid_text(value: Any) -> bool:
+    """True if any string in `value`, however nested, is not valid Unicode."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(value, Mapping):
+        return any(_invalid_text(k) or _invalid_text(v) for k, v in value.items())
+    if isinstance(value, list | tuple):
+        return any(_invalid_text(v) for v in value)
+    return False
+
+
 def _interpret(
     response: LLMResponse, spec: ToolSpec, catalog: Catalog
 ) -> tuple[Plan | Clarification | Enquiry | None, list[str]]:
@@ -856,6 +871,9 @@ def _interpret(
     calls = response.tool_calls
     if not calls:
         return None, [f"you replied in text; call exactly one tool: {spec.plan_tool} or {spec.clarify_tool}"]
+    # Text that is not valid Unicode (a lone surrogate) could reach neither the customer nor the audit log.
+    if any(_invalid_text(c.arguments) for c in calls):
+        return None, ["the tool arguments contain text that is not valid Unicode; write plain text"]
 
     # Asking is always safe, so a clarification wins over anything else in the same reply.
     for call in calls:
