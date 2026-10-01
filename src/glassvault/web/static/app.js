@@ -150,7 +150,10 @@ function renderConfirm(o) {
   if (!usePasskey) approve.textContent = state?.passkey?.simulated_allowed ? "Approve (simulated Face ID)" : "Set up Face ID first";
   approve.disabled = !usePasskey && !state?.passkey?.simulated_allowed;
   approve.addEventListener("click", () => approveChallenge(o, card));
-  card.querySelector(".listen").addEventListener("click", () => speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation"));
+  const listen = card.querySelector(".listen");
+  // Listen toggles: it reads "Stop" while this confirmation is being read.
+  listen.addEventListener("click", () =>
+    speaking?.button === listen ? stopSpeaking() : speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation", listen));
   card.querySelector(".cancel").addEventListener("click", () => {
     card.remove();
     cancel();
@@ -160,7 +163,7 @@ function renderConfirm(o) {
   wrap.appendChild(el("div", "", o.message));
   wrap.appendChild(card);
   chat.appendChild(wrap);
-  if (lastInputWasVoice) speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation");
+  if (lastInputWasVoice) speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation", listen);
 }
 
 // ---------------------------------------------------------------------------
@@ -677,18 +680,21 @@ const TRTC_AUDIO_WAIT_MS = 8000; // no TRTC audio by then: the browser reads the
 // TRTC it fetches the audio by the script's SHA-256, so the AI that drafts cannot choose the
 // voice's words; if TRTC is off, slow or fails, the browser reads the same script. The island
 // shows the voice while it speaks; Face ID takes the island over if an approval starts meanwhile.
-function speakBankVoice(script, key, kind = "script") {
+// `button`, the Listen button that started it, reads "Stop" meanwhile; any other action stops it.
+function speakBankVoice(script, key, kind = "script", button = null) {
   stopSpeaking();
   chime();
-  const turn = {};
-  speaking = turn;
   const what = `the ${kind}${key ? ` · sha256 ${key.slice(0, 12)}…` : ""}`;
+  const turn = { what, button };
+  speaking = turn;
+  if (button) button.textContent = "Stop";
   voiceActivity("tts", "live", `Speaking ${what}`);
   const done = () => {
     if (speaking !== turn) return;
     speaking = null;
     clearTimeout(turn.timer);
     turn.audio?.pause();
+    if (button) button.textContent = "Listen";
     if (island.dataset.mode === "voice") setIsland(null);
     if (turn.fellBack) voiceActivity("tts", "error", `Tencent RTC unavailable; the browser read ${what}`);
     else voiceActivity("tts", "done", `Spoke ${what}`);
@@ -731,14 +737,29 @@ function speakInBrowser(script, turn, done, delay) {
   setTimeout(() => speaking === turn && speechSynthesis.speak(u), delay);
 }
 
+// Cuts the bank voice off mid-sentence, TRTC audio or the browser's, and says so on the panel.
 function stopSpeaking() {
+  const turn = speaking;
+  speaking = null; // first, so the cancelled utterance's own "end" changes nothing
   if ("speechSynthesis" in window) speechSynthesis.cancel();
-  if (speaking) {
-    clearTimeout(speaking.timer);
-    speaking.audio?.pause();
-  }
-  speaking = null;
+  if (!turn) return;
+  clearTimeout(turn.timer);
+  turn.audio?.pause();
+  if (turn.button) turn.button.textContent = "Listen";
+  if (island.dataset.mode === "voice") setIsland(null);
+  voiceActivity("tts", "idle", `Stopped ${turn.what}`);
 }
+
+// Doing anything else interrupts the bank voice, as a person would stop talking: pressing any
+// other control (the mic included, before it starts recording, so the voice is never recorded),
+// or typing. Capture phase, so the voice stops before the control's own handler runs.
+function interruptVoice(e) {
+  if (!speaking) return;
+  if (e.type === "input" || e.type === "change") return stopSpeaking();
+  const control = e.target.closest?.("button, input, select, textarea, a, label, [role='button']");
+  if (control && control !== speaking.button) stopSpeaking();
+}
+for (const type of ["pointerdown", "click", "change", "input"]) document.addEventListener(type, interruptVoice, true);
 
 // ---------------------------------------------------------------------------
 // Rogue mode and gateway attacks
