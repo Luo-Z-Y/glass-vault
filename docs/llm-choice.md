@@ -39,4 +39,4 @@ No. Keep DeepSeek as the drafter; don't swap models mid-hackathon. For the Tence
 **Fallbacks**
 - Validator: `gpt-5.4-mini-2026-03-17`, a model env-var change only.
 - Drafter: DeepSeek.
-- If you use Hy3 through OpenRouter, make sure your "required" to "auto" fallback also catches a 404 (INFERRED), not just a 400.
+- If you use Hy3 through OpenRouter, make sure your "required" to "auto" fallback also catches a 404 (INFERRED), not just a 400. Done (1 Oct): `OpenAICompatLLM` falls back on 400, 404 and 422. `.env.example` has the OpenRouter Hy3 validator lines, pinned to Tencent's own endpoint with `{"provider": {"only": ["tencent"]}}`.

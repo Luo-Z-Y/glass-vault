@@ -181,6 +181,19 @@ def test_falls_back_to_auto_when_required_is_rejected_and_remembers():
     assert [k["tool_choice"] for k in calls.kwargs] == ["required", "auto", "auto"]
 
 
+@pytest.mark.parametrize("status, error", [(404, openai.NotFoundError), (422, openai.UnprocessableEntityError)])
+def test_a_router_that_finds_no_provider_for_required_also_falls_back(status, error):
+    # OpenRouter answers 404 or 422 when no provider of the model takes tool_choice "required".
+    request = httpx2.Request("POST", "https://openrouter.example/api/v1/chat/completions")
+    refused = error("No endpoints found that support tool_choice", response=httpx2.Response(status, request=request),
+                    body=None)
+    ok = completion({"content": "ok"})
+    client, calls = fake_client(refused, ok)
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
+    OpenAICompatLLM(model="tencent/hy3", client=client).chat([], tools=tools, tool_choice="required")
+    assert [k["tool_choice"] for k in calls.kwargs] == ["required", "auto"]
+
+
 def test_an_unrelated_bad_request_does_not_downgrade_tool_choice():
     ok = completion({"content": "ok"})
     client, calls = fake_client(bad_request("context too long"), bad_request("context too long"), ok)
