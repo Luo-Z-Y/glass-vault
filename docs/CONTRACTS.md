@@ -257,6 +257,21 @@ class StepUpVerifier:
 Each gateway error code and the attack it stops are listed in
 `docs/ARCHITECTURE.md`.
 
+## voice.py: TRTC text-to-speech and speech recognition
+
+```python
+class TrtcTts:      # TrtcTts(sdk_app_id, secret_id, secret_key, *, voice, host, region, model, language, http)
+    def synthesize(self, script: str) -> bytes   # one WAV (mono, 16-bit, 24 kHz); parts of <= 255 chars
+class TrtcAsr:      # TrtcAsr(sdk_app_id, sdk_secret_key, *, host, language="en", engine="bigmodel", http)
+    def transcribe(self, wav: bytes) -> str      # mono 16-bit 16 kHz WAV, <= 60 s and 2 MB
+class VoiceError(Exception): code: str; message: str   # TRTC's error code, or ours (BAD_AUDIO, UNREACHABLE...)
+def voice_from_env(environ=None) -> tuple[TrtcTts | None, TrtcAsr | None]
+def tc3_headers(*, secret_id, secret_key, host, action, version, region, payload, timestamp) -> dict[str, str]
+def user_sig(sdk_app_id, sdk_secret_key, identifier, *, expire=86400, now=None) -> str   # TLSSigAPIv2
+```
+The web demo exposes them as `GET /api/voice/{script_hash}` (only scripts the
+control plane rendered) and `POST /api/asr` (a WAV body; returns `{text}`).
+
 ## services/: HTTP split (agent zone vs gateway zone)
 
 - `services/gateway_api.py`: FastAPI app factory

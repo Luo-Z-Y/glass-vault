@@ -6,7 +6,7 @@
 flowchart TB
     subgraph ask[" "]
         direction LR
-        h_ask["📱 Customer device<br/>browser · trusted"] ~~~ mic["🎙️ Push-to-talk<br/>Web Speech API"] --> chat["💬 Chat<br/>HTML · CSS · vanilla JS"]
+        h_ask["📱 Customer device<br/>browser · trusted"] ~~~ mic["🎙️ Push-to-talk<br/>TRTC speech recognition"] --> chat["💬 Chat<br/>HTML · CSS · vanilla JS"]
     end
 
     llm["☁️ LLM APIs · OpenAI SDK<br/>DeepSeek<br/>Tencent Hunyuan hy3"]
@@ -28,7 +28,7 @@ flowchart TB
 
     subgraph approve[" "]
         direction LR
-        h_approve["📱 Customer device<br/>approves"] ~~~ screen["🔊 Confirmation<br/>speechSynthesis voice"] --> passkey["🔐 Passkey<br/>WebAuthn · Face ID"]
+        h_approve["📱 Customer device<br/>approves"] ~~~ screen["🔊 Confirmation<br/>TRTC bank voice"] --> passkey["🔐 Passkey<br/>WebAuthn · Face ID"]
     end
 
     subgraph execute[" "]
@@ -97,7 +97,8 @@ FastAPI + Uvicorn process; the gateway can also run as its own service (see
 
 | Layer | Technology |
 |---|---|
-| Customer app | HTML, CSS and vanilla JavaScript with no build step; Web Speech API for push-to-talk; `speechSynthesis` for the bank voice; WebAuthn passkeys (Face ID / Touch ID) |
+| Customer app | HTML, CSS and vanilla JavaScript with no build step; push-to-talk recorded with an AudioWorklet; WebAuthn passkeys (Face ID / Touch ID) |
+| Voice | Tencent RTC (TRTC): FlowTTS text-to-speech for the bank voice and sentence recognition for push-to-talk, called from the server (`voice.py`); the browser's Web Speech API and `speechSynthesis` when TRTC is not set up |
 | Server | Python 3.12, FastAPI + Uvicorn, Pydantic v2 models, `Decimal` for every amount |
 | AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
 | Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
@@ -272,7 +273,8 @@ covers.
 
 The device signs `crypto.challenge_digest(challenge)`, the SHA-256 of the
 canonical challenge JSON. In the web demo the browser shows the confirmation,
-reads the script aloud in one fixed bank voice, and asks the passkey (user
+reads the script aloud in one fixed bank voice (see [Voice](#voice)), and asks
+the passkey (user
 verification required) to sign; until a passkey is enrolled, a key labelled
 "simulated" signs instead.
 
@@ -378,6 +380,32 @@ it for both roles when no API key is set), `ScriptedLLM` (tests), and
 `RogueLLM`, which wraps the drafter and rewrites each plan with one of five
 attacks.
 
+## Voice
+
+`voice.py` calls Tencent RTC from the server, so its keys never reach the
+browser. Each half is optional; without its settings, or if a call fails, the
+web demo uses the browser's own speech instead.
+
+- **The bank voice** is TRTC text-to-speech (`TrtcTts`, FlowTTS voice
+  `v-female-p9Xy7Q1L`), a Tencent Cloud API 3.0 call signed with
+  TC3-HMAC-SHA256. A script over the API's 255-character limit is split at
+  sentence breaks and joined back into one WAV. It speaks only scripts the
+  control plane rendered: the server keeps each confirmation or answer script
+  under its SHA-256 (for a confirmation, the `script_hash` the customer's
+  signature covers), and `GET /api/voice/{hash}` has no text input, so neither
+  the page nor the agent can make the bank voice say anything else. Audio is
+  cached by hash, so "Listen again" costs no credit.
+- **Push-to-talk** records 16 kHz mono audio in the browser and posts it to
+  `POST /api/asr`, which sends it to TRTC sentence recognition (`TrtcAsr`, the
+  `bigmodel` engine, English), authenticated with a UserSig signed for each
+  request. The text it returns is a `via="voice"` turn like any other: still
+  the customer's untrusted words, checked by the injection scan, provenance
+  and the validator.
+
+Settings: `GV_TRTC_SDK_APP_ID`, `GV_TENCENT_SECRET_ID` and
+`GV_TENCENT_SECRET_KEY` turn on the voice; `GV_TRTC_SDK_APP_ID` and
+`GV_TRTC_SDK_SECRET_KEY` turn on recognition (see `.env.example`).
+
 ## Adversarial review (29 Sep)
 
 An independent multi-agent review attacked the week-1 core and confirmed these,
@@ -421,3 +449,8 @@ money moving before the audit write, and unaudited non-gateway errors.
   drafter. With real models, the validator should be a different family (see
   `docs/llm-choice.md`).
 - The web demo runs every zone in one process (see [Processes](#processes)).
+- Speech recognition runs through the web demo's server, which sits with the
+  agent zone; a real deployment would transcribe on the device or in the
+  control plane. `/api/voice` and `/api/asr` are not rate-limited, and the TRTC
+  services need activating on the account (recognition is not in the free
+  trial).

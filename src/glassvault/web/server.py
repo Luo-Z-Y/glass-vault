@@ -8,12 +8,16 @@ which can read state and request challenges but never execute. Approvals go
 from the browser's passkey straight to `Gateway.execute`.
 
 Without GV_LLM_API_KEY the drafter and validator run on `OfflineLLM`, so the
-whole flow works with no API key.
+whole flow works with no API key. With the TRTC settings (see `voice.py`), the
+bank voice is TRTC text-to-speech and push-to-talk is TRTC speech recognition;
+without them, the browser's own speech is used.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -21,7 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
@@ -37,6 +42,7 @@ from ..rogue import ATTACKS, RogueLLM
 from ..schema import Challenge, FixedAmount, PayNowTransfer, Plan, Turn
 from ..services.webauthn_verifier import WebAuthnVerifier
 from ..stepup import DigitalToken, StepUpVerifier
+from ..voice import ASR_MAX_BYTES, TrtcAsr, TrtcTts, VoiceError, voice_from_env
 
 STATIC = Path(__file__).parent / "static"
 PORT = int(os.environ.get("GV_PORT") or os.environ.get("PORT") or "8000")
@@ -86,6 +92,11 @@ class Demo:
     last_approval: tuple[str, Any] | None = None
     blocked: int = 0
     funds_moved: Decimal = Decimal("0.00")
+    tts: TrtcTts | None = None  # the bank voice; None: the browser speaks
+    asr: TrtcAsr | None = None  # push-to-talk; None: the browser transcribes
+    # The only words the bank voice may say: scripts the control plane rendered, by SHA-256.
+    scripts: OrderedDict[str, str] = field(default_factory=OrderedDict)
+    audio: OrderedDict[str, bytes] = field(default_factory=OrderedDict)  # synthesised scripts, to save credit
 
     @property
     def pipeline(self) -> Pipeline:
@@ -121,7 +132,8 @@ def new_demo() -> Demo:
     phone = DeviceKey()  # the simulated phone, used until a real passkey is enrolled
     gateway.register_device(bank.customer_id, phone.public_bytes)
     drafter, validator, mode = _llms(bank)
-    return Demo(bank, audit, gateway, verifier, phone, token, drafter, validator, mode)
+    tts, asr = voice_from_env()
+    return Demo(bank, audit, gateway, verifier, phone, token, drafter, validator, mode, tts=tts, asr=asr)
 
 
 demo = new_demo()
@@ -158,7 +170,25 @@ def state_json() -> dict[str, Any]:
         "passkey": {"registered": demo.verifier.has_passkey(customer),
                     "simulated_allowed": not demo.verifier.has_passkey(customer)},
         "attacks": {"blocked": demo.blocked, "funds_moved": str(demo.funds_moved)},
+        "voice": {"speak": {"engine": "trtc" if demo.tts else "browser", "name": demo.tts.name if demo.tts else None},
+                  "listen": {"engine": "trtc" if demo.asr else "browser", "name": demo.asr.name if demo.asr else None}},
     }
+
+
+MAX_SCRIPTS = 64
+
+
+def speech(o: Outcome) -> str | None:
+    """Register the bank-rendered script this outcome may speak, and return its SHA-256 (the voice's key)."""
+    script = (o.confirmation or o.answer).spoken_script if (o.confirmation or o.answer) else None
+    if not script:
+        return None
+    key = hashlib.sha256(script.encode("utf-8")).hexdigest()  # equals the confirmation's script_hash
+    demo.scripts[key] = script
+    demo.scripts.move_to_end(key)
+    while len(demo.scripts) > MAX_SCRIPTS:
+        demo.scripts.popitem(last=False)
+    return key
 
 
 def outcome_json(o: Outcome) -> dict[str, Any]:
@@ -253,7 +283,56 @@ def message(req: MessageRequest) -> dict[str, Any]:
         demo.dialogue.clear()
     if outcome.challenge:
         demo.challenges[outcome.challenge.nonce] = outcome.challenge
-    return {"outcome": outcome_json(outcome), "state": state_json()}
+    data = outcome_json(outcome)
+    data["speech"] = speech(outcome)
+    return {"outcome": data, "state": state_json()}
+
+
+# --- Voice (TRTC) -----------------------------------------------------------------------
+
+
+MAX_AUDIO = 16
+
+
+def _voice_error(e: VoiceError, status: int = 502) -> JSONResponse:
+    return JSONResponse({"code": e.code, "status": status, "message": e.message}, status_code=status)
+
+
+@app.get("/api/voice/{script_hash}")
+def voice(script_hash: str):
+    """A bank-rendered script in the bank's TRTC voice, as WAV. It speaks nothing else: there is no text input."""
+    if demo.tts is None:
+        return JSONResponse({"code": "VOICE_OFF", "status": 404, "message": "TRTC voice is not set up"}, 404)
+    script = demo.scripts.get(script_hash)
+    if script is None:
+        return JSONResponse({"code": "UNKNOWN_SCRIPT", "status": 404, "message": "not a script the bank rendered"}, 404)
+    audio = demo.audio.get(script_hash)
+    if audio is None:
+        try:
+            audio = demo.tts.synthesize(script)
+        except VoiceError as e:
+            return _voice_error(e)
+        demo.audio[script_hash] = audio
+        while len(demo.audio) > MAX_AUDIO:
+            demo.audio.popitem(last=False)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=600"})
+
+
+@app.post("/api/asr")
+async def transcribe(request: Request):
+    """One push-to-talk recording (mono 16-bit 16 kHz WAV) as text, by TRTC speech recognition."""
+    if demo.asr is None:
+        return JSONResponse({"code": "ASR_OFF", "status": 404, "message": "TRTC speech recognition is not set up"}, 404)
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > ASR_MAX_BYTES:
+            return JSONResponse({"code": "AUDIO_TOO_LONG", "status": 413, "message": "recording too long"}, 413)
+    try:
+        text = await run_in_threadpool(demo.asr.transcribe, bytes(body))
+    except VoiceError as e:
+        return _voice_error(e, 400 if e.code in ("BAD_AUDIO", "AUDIO_TOO_LONG") else 502)
+    return {"text": text}
 
 
 @app.post("/api/cancel")

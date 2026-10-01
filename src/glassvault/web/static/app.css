@@ -745,6 +745,8 @@ body.rogue .console.llm { border-color: var(--red); box-shadow: 0 0 0 3px rgba(2
 .model-name { margin-top: 4px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .model-host { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .model .card-sub { margin-top: 6px; }
+#voice-card .model-role { display: flex; align-items: center; gap: 8px; }
+#voice-card .pill { margin-left: auto; text-transform: none; letter-spacing: normal; }
 body.rogue #drafter-card { background: var(--red-soft); border-color: var(--red-line); box-shadow: inset 3px 0 0 var(--red); }
 body.rogue #drafter-card .model-role::after {
   content: "Rogue";
