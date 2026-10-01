@@ -39,8 +39,9 @@ without them, the browser's own speech is used.
 Copy `.env.example` to `.env` and add your key. The defaults use DeepSeek's own
 API, with `deepseek-flash` drafting and `deepseek-v4-pro` validating, and thinking
 mode off for both roles (in thinking mode DeepSeek rejects forced tool calls).
-A validator from a different model family makes its check more independent; for
-Tencent Hunyuan on Tencent Cloud International TokenHub, set:
+A validator from a different model family makes its check more independent.
+For Tencent Hunyuan Hy3 through OpenRouter, see `.env.example`; on Tencent Cloud
+International TokenHub, set:
 
 ```
 GV_VALIDATOR_BASE_URL=https://tokenhub-intl.tencentcloudmaas.com/v1

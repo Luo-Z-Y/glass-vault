@@ -149,9 +149,11 @@ def response_from_completion(completion: Any) -> LLMResponse:
 class OpenAICompatLLM(LLM):
     """Any OpenAI-compatible chat-completions endpoint with tool calling.
 
-    Some compatible endpoints reject ``tool_choice="required"``. The first
-    such rejection downgrades this client to ``"auto"``; the drafter's repair
-    round then handles a model that answers in text instead of calling a tool.
+    Some compatible endpoints reject ``tool_choice="required"``: with a 400, or
+    through a router such as OpenRouter with a 404 or 422 when no provider takes
+    it. The first such rejection downgrades this client to ``"auto"``; the
+    drafter's repair round then handles a model that answers in text instead of
+    calling a tool.
 
     `extra_body` carries provider-specific request fields, such as DeepSeek's
     switch for thinking mode. Tests pass a fake `client` instead of a real one.
@@ -199,7 +201,7 @@ class OpenAICompatLLM(LLM):
         try:
             try:
                 completion = self._client.chat.completions.create(**kwargs)
-            except openai.BadRequestError:
+            except (openai.BadRequestError, openai.NotFoundError, openai.UnprocessableEntityError):
                 if kwargs.get("tool_choice") != "required":
                     raise
                 kwargs["tool_choice"] = "auto"
