@@ -229,11 +229,12 @@ class Pipeline:
             self._record(dialogue, outcome, drafts)
         except Exception as e:
             # No record, no offer: a challenge already issued is never shown, so it expires unused.
-            reason = e.code if isinstance(e, GatewayError) else type(e).__name__
+            reason = getattr(e, "code", None) or type(e).__name__
             failed = TraceEvent("audit", False, f"could not file the request ({reason}); nothing was offered")
             outcome = Outcome("error", MSG_ERROR, trace=outcome.trace + (failed,), llm_calls=outcome.llm_calls)
-            with contextlib.suppress(Exception):
-                self._gateway.record_request(self._abridged(dialogue, outcome))
+            if _refused(e):  # after a lost connection the record may have landed; do not file it twice
+                with contextlib.suppress(Exception):
+                    self._gateway.record_request(self._abridged(dialogue, outcome))
         return outcome
 
     def _record(self, dialogue: Sequence[Turn], outcome: Outcome, drafts: _Drafts) -> None:
@@ -244,8 +245,8 @@ class Pipeline:
         """
         try:
             self._gateway.record_request(self._full(dialogue, outcome, drafts))
-        except Exception:
-            if outcome.kind == "confirm":
+        except Exception as e:
+            if outcome.kind == "confirm" or not _refused(e):
                 raise
             self._gateway.record_request(self._abridged(dialogue, outcome))
 
@@ -598,11 +599,18 @@ def _fits(turns: Sequence[Turn], budget: int) -> bool:
 
 
 def _fitted(turns: Sequence[Turn], budget: int) -> list[Turn]:
-    """The newest turns that fit in a record (all of them, for any request that was not stopped as too long)."""
+    """The newest turns that fit in `budget` bytes and the record's turn and character limits."""
     kept = list(turns)
     while kept and not _fits(kept, budget):
         kept.pop(0)
     return kept
+
+
+def _refused(error: Exception) -> bool:
+    """True if a record could not be built or the gateway turned it down, as opposed to a lost connection."""
+    if isinstance(error, ValueError):  # building it locally: pydantic's ValidationError, UnicodeError
+        return True
+    return getattr(error, "code", None) not in (None, "HTTP_ERROR")  # a gateway refusal has a code
 
 
 def _loggable(text: str) -> str:

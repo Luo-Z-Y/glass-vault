@@ -246,15 +246,23 @@ def test_the_pipelines_approvals_execute(pipeline, gateway, phone):
 
 
 class _UnrecordedPort(LocalGatewayPort):
+    def __init__(self, gateway):
+        super().__init__(gateway)
+        self.attempts = 0
+
     def record_request(self, record):
+        self.attempts += 1
         raise ConnectionError("audit store unreachable")
 
 
-def test_a_turn_that_cannot_be_filed_offers_nothing_to_sign(bank, gateway):
+@pytest.mark.parametrize("text", ["Send mum 300 for groceries", "send John fifty"])
+def test_a_turn_that_cannot_be_filed_offers_nothing(bank, gateway, text):
     llm = OfflineLLM(bank.view)
-    o = Pipeline(_UnrecordedPort(gateway), llm, llm).handle([said("Send mum 300 for groceries")])
+    port = _UnrecordedPort(gateway)
+    o = Pipeline(port, llm, llm).handle([said(text)])
     assert o.kind == "error" and o.challenge is None and o.plan is None
     assert o.trace[-1].stage == "audit" and not o.trace[-1].ok and "ConnectionError" in o.trace[-1].detail
+    assert port.attempts == 1  # the record may have landed before the connection dropped: no second copy
 
 
 def test_a_conversation_too_long_to_record_whole_is_stopped_and_recorded(pipeline, audit):
@@ -277,31 +285,36 @@ def test_text_that_swells_in_the_log_is_still_on_record(pipeline, audit):
     assert audit.first_broken() is None
 
 
-def test_model_text_the_log_cannot_hold_is_filed_abridged(bank, gateway, audit):
-    from glassvault.drafter import CLARIFY_TOOL
+@pytest.mark.parametrize("tool, args", [
+    ("ask_clarification", {"reason": "missing_info", "question": "Which account? \ud800"}),
+    ("submit_plan", {"steps": [{"id": "t1", "type": "paynow", "from_account": "SAV", "payee_id": "P_MUM",
+                                "amount": {"value": "300"}, "evidence": {"amount": "300", "payee_id": "mum\ud800"}}]}),
+])
+def test_model_text_that_is_not_valid_unicode_is_a_malformed_tool_call(bank, gateway, audit, tool, args):
     from glassvault.llm import ScriptedLLM, tool_response
 
-    asks = tool_response(CLARIFY_TOOL, {"reason": "missing_info", "question": "Which account? \ud800"})
     honest = OfflineLLM(bank.view)
-    o = Pipeline(LocalGatewayPort(gateway), ScriptedLLM([asks]), honest).handle([said("move some money")])
-    assert o.kind == "clarify"
+    drafter = ScriptedLLM([tool_response(tool, args)] * 2)  # the repair round gets the same answer
+    o = Pipeline(LocalGatewayPort(gateway), drafter, honest).handle([said("send mum 300")])
+    assert o.kind == "error" and o.challenge is None and o.message.isascii()
     [record] = requests(audit)
-    assert record["abridged"] and record["outcome"] == "clarify" and record["message"] == "Which account? ?"
-    assert record["transcript"] == [{"role": "customer", "text": "move some money", "via": "text"}]
+    assert record["outcome"] == "error" and not record["abridged"] and record["draft"] is None
 
 
-def test_a_confirm_with_model_text_the_log_cannot_hold_is_not_offered(bank, gateway, audit):
-    from glassvault.drafter import PLAN_TOOL
-    from glassvault.llm import ScriptedLLM, tool_response
+class _RefusesFullRecords(LocalGatewayPort):
+    def record_request(self, record):
+        if not record.abridged:
+            raise GatewayError("MALFORMED_RECORD", "simulated refusal")
+        return super().record_request(record)
 
-    plan = {"steps": [{"id": "t1", "type": "paynow", "from_account": "SAV", "payee_id": "P_MUM",
-                       "amount": {"value": "300"}, "evidence": {"amount": "300", "payee_id": "mum\ud800"}}]}
-    honest = OfflineLLM(bank.view)
-    o = Pipeline(LocalGatewayPort(gateway), ScriptedLLM([tool_response(PLAN_TOOL, plan)]), honest).handle(
-        [said("send mum 300")])
-    assert o.kind == "error" and o.challenge is None
+
+def test_a_stopped_turn_the_gateway_refuses_whole_is_filed_abridged(bank, gateway, audit):
+    llm = OfflineLLM(bank.view)
+    o = Pipeline(_RefusesFullRecords(gateway), llm, llm).handle([said("send John fifty")])
+    assert o.kind == "clarify"  # the customer still gets the question
     [record] = requests(audit)
-    assert record["abridged"] and record["outcome"] == "error"
+    assert record["abridged"] and record["outcome"] == "clarify" and record["clarification"] is None
+    assert record["transcript"] == [{"role": "customer", "text": "send John fifty", "via": "text"}]
 
 
 class _RefusesConfirms(LocalGatewayPort):

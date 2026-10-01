@@ -232,9 +232,11 @@ audit log (step 12).
     request too long to keep whole on record (over 100 turns, 50,000
     characters or 128 KiB) is stopped before drafting, and its record keeps the
     newest turns that fit, with a count of the ones left out. A stopped turn
-    whose full record cannot be filed (too big, or model text the log cannot
-    hold) is filed `abridged`: its outcome, its trace and the newest turns that
-    fit.
+    whose full record the gateway refuses (for example, too big) is filed
+    `abridged`: its outcome, its trace and the newest turns that fit. A lost
+    connection is not retried this way, in case the record landed. Model output
+    with text that is not valid Unicode is treated as a malformed tool call, so
+    it never reaches the customer or the log.
 
 What the customer reads is never free LLM text, with one exception. Outcome
 messages are fixed templates, the confirmation is rendered from templates and
@@ -250,7 +252,8 @@ The gateway issues a challenge only after its own checks: a strict re-parse of
 the plan (`MALFORMED_PLAN`), every `to_display` label re-derived from bank
 records (`STALE_PLAN`), a simulation against live balances and quotes, and its
 own run of the risk rules. It keeps its validated copy of the plan under the
-nonce, logs `CHALLENGE_ISSUED` with the full plan and both hashes, and returns
+nonce, logs `CHALLENGE_ISSUED` with the full plan, its hash, the script hash
+and the transcript hash, and returns
 `Challenge{nonce, plan_hash, customer_id, expires_at, script_hash,
 transcript_hash, policy_decision_id, step_up_required}`, valid for 2 minutes.
 A hash that is not SHA-256 hex is `MALFORMED_PLAN`.
