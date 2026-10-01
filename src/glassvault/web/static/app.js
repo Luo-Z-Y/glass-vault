@@ -218,7 +218,7 @@ async function refreshAudit() {
   list.innerHTML = "";
   for (const e of entries.slice(-10).reverse()) {
     const li = el("li");
-    li.appendChild(el("span", "kind", e.kind));
+    li.appendChild(el("span", "kind", e.outcome ? `${e.kind} · ${e.outcome}` : e.kind));
     li.appendChild(el("span", "at", e.at.slice(11, 19)));
     li.appendChild(el("span", "hash", e.hash.slice(0, 12)));
     list.appendChild(li);

@@ -391,7 +391,10 @@ def run_attack(kind: str) -> dict[str, Any]:
 def audit() -> dict[str, Any]:
     entries = demo.audit.entries
     return {"intact": demo.audit.first_broken() is None,
-            "entries": [{"seq": e.seq, "kind": e.kind, "at": e.at, "hash": e.hash} for e in entries]}
+            "entries": [{"seq": e.seq, "kind": e.kind, "at": e.at, "hash": e.hash,
+                         # A REQUEST entry is one customer turn; its outcome says what became of it.
+                         "outcome": e.data.get("outcome") if e.kind == "REQUEST" else None}
+                        for e in entries]}
 
 
 @app.exception_handler(GatewayError)

@@ -16,6 +16,7 @@ which can only stop things (a disagreement freezes; it can never approve).
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -31,6 +32,7 @@ from .context import (
     payee_is_mentioned,
     scan_text,
 )
+from .crypto import transcript_hash
 from .drafter import DraftError, draft
 from .evaluator import EvaluationError, resolve
 from .gateway import Execution, Gateway, GatewayError
@@ -44,23 +46,25 @@ from .schema import (
     Clarification,
     ClarifyOption,
     ConfirmationView,
+    DiffLine,
     Enquiry,
     EnquiryAnswer,
     EquityBuy,
     FixedAmount,
     FractionOfBalance,
     FractionOfStep,
+    OutcomeKind,
     OwnTransfer,
     PayNowTransfer,
     Plan,
     PolicyDecision,
+    RequestRecord,
     ResolvedPlan,
+    TraceLine,
     Turn,
 )
 from .enquiry import answer as answer_enquiry
 from .validator import PlanDiff, diff_plans, independent_plan
-
-OutcomeKind = Literal["confirm", "clarify", "answer", "frozen", "refused", "held", "error"]
 
 # Customer-facing messages are fixed templates, never LLM text.
 MSG_FROZEN = "I've stopped this request because a safety check didn't match what you asked for. Nothing has been sent."
@@ -108,14 +112,16 @@ class Outcome:
 
 
 class GatewayPort(Protocol):
-    """What the pipeline may ask of the gateway: read state, request a challenge. Never execute."""
+    """What the pipeline may ask of the gateway: read state, request a challenge, file a turn. Never execute."""
 
     def now(self) -> datetime: ...
     def view(self) -> BankView: ...
     def history(self, since: datetime | None = None) -> Sequence[Execution]: ...
     def issue_challenge(
-        self, plan: ResolvedPlan, *, script_hash: str | None = None, policy_decision_id: str | None = None
+        self, plan: ResolvedPlan, *, script_hash: str | None = None, transcript_hash: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> Challenge: ...
+    def record_request(self, record: RequestRecord) -> Any: ...
 
 
 class LocalGatewayPort:
@@ -134,11 +140,15 @@ class LocalGatewayPort:
         return self._gateway.history(since)
 
     def issue_challenge(
-        self, plan: ResolvedPlan, *, script_hash: str | None = None, policy_decision_id: str | None = None
+        self, plan: ResolvedPlan, *, script_hash: str | None = None, transcript_hash: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> Challenge:
         return self._gateway.issue_challenge(
-            plan, script_hash=script_hash, policy_decision_id=policy_decision_id
+            plan, script_hash=script_hash, transcript_hash=transcript_hash, policy_decision_id=policy_decision_id
         )
+
+    def record_request(self, record: RequestRecord) -> Any:
+        return self._gateway.record_request(record)
 
 
 class _CountingLLM:
@@ -152,6 +162,14 @@ class _CountingLLM:
     def chat(self, messages: list[dict], **kwargs: Any) -> LLMResponse:
         self.calls += 1
         return self._llm.chat(messages, **kwargs)
+
+
+@dataclass
+class _Drafts:
+    """What the two models produced on this turn, kept for its REQUEST record."""
+
+    draft: Plan | Clarification | Enquiry | None = None
+    check: Plan | Clarification | None = None
 
 
 class _Stop(Exception):
@@ -176,19 +194,59 @@ class Pipeline:
         """Take the dialogue so far and return one Outcome for the customer's latest turn.
 
         A stopped request comes back as an Outcome, not an exception, and its trace
-        shows which stage stopped it.
+        shows which stage stopped it. Whatever the outcome, the turn is filed in the
+        gateway's audit log as REQUEST before it is returned. If that fails, the turn
+        ends in an error and nothing is offered for signing.
         """
         dialogue = _current_request(dialogue)
         drafter, validator = _CountingLLM(self._drafter_llm), _CountingLLM(self._validator_llm)
         trace: list[TraceEvent] = []
+        drafts = _Drafts()
         try:
-            return self._handle(dialogue, drafter, validator, trace)
+            outcome = self._handle(dialogue, drafter, validator, trace, drafts)
         except _Stop as stop:
-            return Outcome(stop.kind, stop.message, trace=tuple(trace),
-                           llm_calls=drafter.calls + validator.calls, **stop.extra)
+            outcome = Outcome(stop.kind, stop.message, trace=tuple(trace),
+                              llm_calls=drafter.calls + validator.calls, **stop.extra)
+        except Exception as e:
+            # A bug, not a decision: it still goes on record, then propagates as before.
+            trace.append(TraceEvent("error", False, f"unexpected {type(e).__name__}"))
+            with contextlib.suppress(Exception):
+                self._record(dialogue, Outcome("error", MSG_ERROR, trace=tuple(trace),
+                                               llm_calls=drafter.calls + validator.calls), drafts)
+            raise
+        try:
+            self._record(dialogue, outcome, drafts)
+        except Exception as e:
+            # No record, no offer: a challenge already issued is never shown, so it expires unused.
+            reason = e.code if isinstance(e, GatewayError) else type(e).__name__
+            failed = TraceEvent("audit", False, f"could not file the request ({reason}); nothing was offered")
+            return Outcome("error", MSG_ERROR, trace=outcome.trace + (failed,), llm_calls=outcome.llm_calls)
+        return outcome
+
+    def _record(self, dialogue: Sequence[Turn], outcome: Outcome, drafts: _Drafts) -> None:
+        """File this turn in the gateway's audit log as a REQUEST entry (see RequestRecord)."""
+        diff = outcome.diff.diffs if outcome.diff else None
+        self._gateway.record_request(RequestRecord(
+            transcript=tuple(dialogue),
+            outcome=outcome.kind,
+            message=outcome.message[:4000],
+            nonce=outcome.challenge.nonce if outcome.challenge else None,
+            draft=drafts.draft,
+            check=drafts.check,
+            plan=outcome.plan,
+            diff=None if diff is None else tuple(DiffLine(kind=d.kind, step=d.step, detail=d.detail[:1000]) for d in diff),
+            policy=outcome.policy,
+            clarification=outcome.clarification,
+            confirmation=outcome.confirmation,
+            answer=outcome.answer,
+            trace=tuple(TraceLine(stage=t.stage[:40], ok=t.ok, detail=t.detail[:4000]) for t in outcome.trace),
+            drafter=self._drafter_llm.name[:200],
+            validator=self._validator_llm.name[:200],
+            llm_calls=outcome.llm_calls,
+        ))
 
     def _handle(self, dialogue: Sequence[Turn], drafter: _CountingLLM, validator: _CountingLLM,
-                trace: list[TraceEvent]) -> Outcome:
+                trace: list[TraceEvent], drafts: _Drafts) -> Outcome:
         view = self._gateway.view()
         now = self._gateway.now()
         said = _customer_text(dialogue)
@@ -213,6 +271,7 @@ class Pipeline:
             except DraftError as e:
                 trace.append(TraceEvent("draft", False, str(e)))
                 raise _Stop("error", MSG_ERROR) from e
+            drafts.draft = drafted
 
             if isinstance(drafted, Clarification):
                 trace.append(TraceEvent("draft", True, f"asks: {drafted.reason}"))
@@ -227,6 +286,7 @@ class Pipeline:
             except DraftError as e:
                 trace.append(TraceEvent("validator", False, f"validator failed: {e}"))
                 raise _Stop("frozen", MSG_FROZEN) from e
+            drafts.check = check
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
@@ -267,7 +327,8 @@ class Pipeline:
             raise _Stop("frozen", MSG_FROZEN, plan=plan) from e
         try:
             challenge = self._gateway.issue_challenge(
-                plan, script_hash=confirmation.script_hash, policy_decision_id=decision.id
+                plan, script_hash=confirmation.script_hash, transcript_hash=transcript_hash(dialogue),
+                policy_decision_id=decision.id,
             )
         except GatewayError as e:
             # The gateway re-checks everything; if it disagrees with us, stop.

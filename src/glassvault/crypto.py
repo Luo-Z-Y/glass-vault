@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -25,7 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from pydantic import BaseModel
 
-from .schema import Challenge, ResolvedPlan
+from .schema import Challenge, ResolvedPlan, Turn
 
 
 def _json_default(value: Any) -> Any:
@@ -52,6 +53,11 @@ def sha256_hex(data: bytes) -> str:
 def plan_hash(plan: ResolvedPlan) -> str:
     """The fingerprint an approval is bound to: changing anything in the plan, even one cent, changes it."""
     return sha256_hex(canonical_bytes(plan))
+
+
+def transcript_hash(turns: Sequence[Turn]) -> str:
+    """The fingerprint of a conversation: every turn's role, text and via flag, in order."""
+    return sha256_hex(canonical_bytes([t.model_dump(mode="json") for t in turns]))
 
 
 def challenge_digest(challenge: Challenge) -> bytes:

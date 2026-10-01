@@ -3,9 +3,10 @@
 The customer approves a plan with Face ID or Touch ID. The passkey does not
 sign a random server challenge: it signs ``crypto.challenge_digest(challenge)``,
 the SHA-256 of the canonical ``Challenge{plan_hash, nonce, customer_id,
-expires_at, script_hash, policy_decision_id, step_up_required}``. One
-assertion therefore covers exactly one plan, one nonce and one expiry, and the
-gateway's check keeps the same shape as with the raw ``DeviceKey``:
+expires_at, script_hash, transcript_hash, policy_decision_id,
+step_up_required}``. One assertion therefore covers exactly one plan, one
+nonce, one expiry and the conversation it came from, and the gateway's check
+keeps the same shape as with the raw ``DeviceKey``:
 ``verify(customer_id, message, proof)``.
 
 Choices worth knowing:
