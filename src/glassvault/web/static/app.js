@@ -452,6 +452,9 @@ function faceIdScan() {
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
 const MAX_RECORDING_MS = 30_000;
+const MIN_RECORDING_S = 0.3;
+const INPUT_HINT = input.placeholder;
+let trtcListenFailed = false; // after TRTC recognition fails, later presses use the browser's own (if any)
 
 function setupMic() {
   const mic = $("#mic");
@@ -461,27 +464,40 @@ function setupMic() {
   }
   let session = null;
   let limit = null;
+  let busy = false; // from release until the recording is transcribed and sent
+  const listening = (on) => {
+    mic.classList.toggle("listening", on);
+    phone.classList.toggle("mic-on", on);
+  };
+  const end = () => {
+    session = null;
+    clearTimeout(limit);
+    listening(false);
+  };
   const stop = () => {
     if (!session) return;
     const current = session;
-    session = null;
-    clearTimeout(limit);
-    mic.classList.remove("listening");
-    phone.classList.remove("mic-on");
-    current.stop();
+    end();
+    busy = true;
+    Promise.resolve(current.stop()).finally(() => (busy = false));
   };
   const start = (e) => {
     e.preventDefault();
-    if (session || mic.disabled) return;
-    const trtc = state?.voice?.listen?.engine === "trtc" && canRecord;
+    if (session || busy) return;
+    const trtc = state?.voice?.listen?.engine === "trtc" && canRecord && !(trtcListenFailed && Recognition);
     if (!trtc && !Recognition) {
       addMsg("system", "Voice input needs TRTC speech recognition or a browser that can transcribe. You can type instead.");
       return;
     }
-    session = trtc ? recordForTrtc() : listenInBrowser();
-    voiceActivity("asr", "live", "Listening…");
-    mic.classList.add("listening");
-    phone.classList.add("mic-on");
+    const lit = () => {
+      if (session !== current) return; // released before the microphone came on
+      listening(true); // lit once the microphone is really on
+      voiceActivity("asr", "live", "Listening…");
+    };
+    const current = trtc
+      ? recordForTrtc(lit)
+      : listenInBrowser(lit, () => session === current && end()); // recognition can end by itself
+    session = current;
     limit = setTimeout(stop, MAX_RECORDING_MS);
   };
   mic.addEventListener("pointerdown", start);
@@ -489,14 +505,16 @@ function setupMic() {
   mic.addEventListener("pointerleave", stop);
 }
 
-function listenInBrowser() {
+function listenInBrowser(onStart, onEnd) {
   const recognition = new Recognition();
   recognition.lang = "en-SG";
   recognition.interimResults = true;
+  recognition.onaudiostart = onStart;
   recognition.onresult = (ev) => {
     input.value = Array.from(ev.results).map((r) => r[0].transcript).join("");
   };
   recognition.onend = () => {
+    onEnd();
     if (input.value.trim()) {
       voiceActivity("asr", "done", `Heard “${input.value.trim()}”`);
       lastInputWasVoice = true;
@@ -510,10 +528,9 @@ function listenInBrowser() {
 }
 
 // Records the microphone while the button is held, then sends 16 kHz mono WAV to the server,
-// which has TRTC transcribe it. Nothing is sent for a press shorter than a third of a second.
-function recordForTrtc() {
+// which has TRTC transcribe it. `onReady` runs once audio is actually being captured.
+function recordForTrtc(onReady) {
   const chunks = [];
-  const started = performance.now();
   let stream = null;
   let ctx = null;
   const ready = (async () => {
@@ -526,37 +543,42 @@ function recordForTrtc() {
     node.port.onmessage = (ev) => chunks.push(ev.data);
     ctx.createMediaStreamSource(stream).connect(node);
     node.connect(ctx.destination); // silent; keeps the recorder running
+    await ctx.resume();
+    onReady();
   })();
   return {
     async stop() {
-      const held = performance.now() - started;
+      let rate = 0;
       try {
         await ready;
+        rate = ctx.sampleRate;
       } catch (err) {
         voiceActivity("asr", "error", "The microphone is not available");
+        voiceActivity("asr", "error", `Microphone unavailable: ${err.message}`);
         addMsg("system", `The microphone is not available (${err.message}). You can type instead.`);
         return;
       } finally {
         stream?.getTracks().forEach((t) => t.stop());
+        if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
       }
-      const rate = ctx.sampleRate;
-      await ctx.close();
-      if (held < 330 || !chunks.length) return voiceActivity("asr", "idle", "Too short to send");
+      const seconds = chunks.reduce((n, c) => n + c.length, 0) / rate;
+      if (seconds < MIN_RECORDING_S) {
+        voiceActivity("asr", "idle", "Too short to send");
+        addMsg("system", "Hold the mic while you speak, then let go.");
+        return;
+      }
       await transcribeWithTrtc(wav16k(chunks, rate));
     },
   };
 }
 
 async function transcribeWithTrtc(wav) {
-  const mic = $("#mic");
-  const hint = input.placeholder;
   input.placeholder = "Transcribing…";
-  mic.disabled = true;
   voiceActivity("asr", "live", "Transcribing with Tencent RTC…");
   try {
     const res = await fetch("/api/asr", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || res.statusText);
+    if (!res.ok) throw Object.assign(new Error(data.message || res.statusText), { status: res.status });
     if (data.text?.trim()) {
       voiceActivity("asr", "done", `Heard “${data.text.trim()}”`);
       lastInputWasVoice = true;
@@ -566,11 +588,13 @@ async function transcribeWithTrtc(wav) {
       addMsg("system", "I didn't catch anything. Hold the mic and try again, or type.");
     }
   } catch (err) {
+    // The service failed (not the recording): the browser listens from the next press, if it can.
+    if (Recognition && (!err.status || err.status >= 500)) trtcListenFailed = true;
     voiceActivity("asr", "error", `Couldn't transcribe: ${err.message}`);
-    addMsg("system", `Couldn't transcribe that (${err.message}). You can type instead.`);
+    const next = trtcListenFailed ? "Hold the mic again: this browser will listen instead." : "You can type instead.";
+    addMsg("system", `Couldn't transcribe that (${err.message}). ${next}`);
   } finally {
-    input.placeholder = hint;
-    mic.disabled = false;
+    input.placeholder = INPUT_HINT;
   }
 }
 
@@ -583,14 +607,24 @@ function wav16k(chunks, rate) {
     samples.set(c, offset);
     offset += c.length;
   }
-  const ratio = Math.max(1, rate / 16000);
+  const ratio = rate / 16000;
   const pcm = new Int16Array(Math.floor(total / ratio));
   for (let i = 0; i < pcm.length; i++) {
-    const from = Math.floor(i * ratio);
-    const to = Math.max(from + 1, Math.min(total, Math.floor((i + 1) * ratio)));
-    let sum = 0;
-    for (let j = from; j < to; j++) sum += samples[j];
-    const v = Math.max(-1, Math.min(1, sum / (to - from)));
+    let v;
+    if (ratio >= 1) {
+      // Faster than 16 kHz: average the samples this output sample covers.
+      const from = Math.floor(i * ratio);
+      const to = Math.max(from + 1, Math.min(total, Math.floor((i + 1) * ratio)));
+      let sum = 0;
+      for (let j = from; j < to; j++) sum += samples[j];
+      v = sum / (to - from);
+    } else {
+      // Slower (a narrowband headset): interpolate between the two nearest samples.
+      const at = i * ratio;
+      const j = Math.floor(at);
+      v = samples[j] + (samples[Math.min(j + 1, total - 1)] - samples[j]) * (at - j);
+    }
+    v = Math.max(-1, Math.min(1, v));
     pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
   }
   const buffer = new ArrayBuffer(44 + pcm.length * 2);
@@ -637,11 +671,12 @@ function chime() {
 }
 
 let speaking = null;
+const TRTC_AUDIO_WAIT_MS = 8000; // no TRTC audio by then: the browser reads the script instead
 
 // The bank voice reads a script the bank rendered (`kind`: "confirmation" or "answer"). With
-// TRTC it fetches the audio by the script's SHA-256, so this page cannot make the voice say
-// anything else; if TRTC is off or fails, the browser reads the same script. The island shows
-// the voice while it speaks; Face ID takes the island over if an approval starts meanwhile.
+// TRTC it fetches the audio by the script's SHA-256, so the AI that drafts cannot choose the
+// voice's words; if TRTC is off, slow or fails, the browser reads the same script. The island
+// shows the voice while it speaks; Face ID takes the island over if an approval starts meanwhile.
 function speakBankVoice(script, key, kind = "script") {
   stopSpeaking();
   chime();
@@ -652,22 +687,33 @@ function speakBankVoice(script, key, kind = "script") {
   const done = () => {
     if (speaking !== turn) return;
     speaking = null;
+    clearTimeout(turn.timer);
+    turn.audio?.pause();
     if (island.dataset.mode === "voice") setIsland(null);
     if (turn.fellBack) voiceActivity("tts", "error", `Tencent RTC unavailable; the browser read ${what}`);
     else voiceActivity("tts", "done", `Spoke ${what}`);
   };
   if (!island.dataset.mode) setIsland("voice");
-  setTimeout(done, 4000 + script.length * 120); // for players that never report the end
   if (key && state?.voice?.speak?.engine === "trtc") {
     const audio = new Audio(`/api/voice/${key}`); // starts fetching during the chime
     turn.audio = audio;
     const fallBack = () => {
-      if (turn.fellBack || speaking !== turn) return;
+      if (turn.fellBack || speaking !== turn || turn.audio !== audio) return;
       turn.fellBack = true;
+      audio.pause();
+      audio.removeAttribute("src");
+      turn.audio = null;
       speakInBrowser(script, turn, done, 0);
     };
     audio.onended = done;
     audio.onerror = fallBack;
+    audio.onplaying = () => {
+      // Playing: wait for the end, with a margin in case the player never reports it.
+      clearTimeout(turn.timer);
+      const seconds = Number.isFinite(audio.duration) ? audio.duration : script.length / 12;
+      turn.timer = setTimeout(done, seconds * 1000 + 2000);
+    };
+    turn.timer = setTimeout(fallBack, TRTC_AUDIO_WAIT_MS);
     setTimeout(() => speaking === turn && audio.play().catch(fallBack), 450);
     return;
   }
@@ -680,13 +726,17 @@ function speakInBrowser(script, turn, done, delay) {
   u.voice = bankVoice();
   u.rate = 0.95;
   u.onend = u.onerror = done;
-  turn.utterance = u;
+  clearTimeout(turn.timer);
+  turn.timer = setTimeout(done, delay + 2000 + script.length * 100); // for browsers that never fire "end"
   setTimeout(() => speaking === turn && speechSynthesis.speak(u), delay);
 }
 
 function stopSpeaking() {
   if ("speechSynthesis" in window) speechSynthesis.cancel();
-  speaking?.audio?.pause();
+  if (speaking) {
+    clearTimeout(speaking.timer);
+    speaking.audio?.pause();
+  }
   speaking = null;
 }
 

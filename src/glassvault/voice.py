@@ -12,9 +12,9 @@
 
 The keys stay on the server: the browser sends audio up and gets audio back.
 The web demo asks ``TrtcTts`` only for scripts the control plane rendered (a
-confirmation or an enquiry answer), never for text a client supplies, so the
-bank voice cannot be made to say anything else. Either service is optional:
-without its settings, the web demo falls back to the browser's own speech.
+confirmation or an enquiry answer), which hold no text from an LLM or from a
+third party, and never for text a client supplies. Either service is optional:
+without its settings, the web demo uses the browser's own speech.
 """
 
 from __future__ import annotations
@@ -175,8 +175,8 @@ def check_wav(data: bytes, *, sample_rate: int = ASR_SAMPLE_RATE) -> float:
         with wave.open(io.BytesIO(data), "rb") as w:
             shape = (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getcomptype())
             frames = w.getnframes()
-    except (wave.Error, EOFError) as e:
-        raise VoiceError("BAD_AUDIO", f"not a WAV file: {e}") from e
+    except Exception as e:  # the wave module raises several types on a malformed file
+        raise VoiceError("BAD_AUDIO", f"not a WAV file: {type(e).__name__}") from e
     if shape != (1, 2, sample_rate, "NONE"):
         raise VoiceError("BAD_AUDIO", f"expected mono 16-bit {sample_rate} Hz PCM, got {shape}")
     return frames / sample_rate
@@ -197,7 +197,9 @@ class TrtcTts:
     region: str = TTS_REGION
     model: str | None = None  # None: the API's default model
     language: str = "en"
-    timeout: float = 20.0
+    timeout: float = 10.0  # per request
+    deadline: float = 20.0  # bounds the server's work on one script; the page falls back to the
+    # browser voice after 8 seconds, and audio that arrives later is still cached for "Listen again"
     http: Any = None  # an httpx.Client; tests pass one with a mock transport
 
     @property
@@ -209,9 +211,16 @@ class TrtcTts:
         parts = split_script(script)
         if not parts:
             raise VoiceError("EMPTY_TEXT", "nothing to say")
-        return pcm_to_wav(b"".join(self._pcm(p) for p in parts), TTS_SAMPLE_RATE)
+        give_up = time.monotonic() + self.deadline
+        pcm = []
+        for part in parts:
+            remaining = give_up - time.monotonic()
+            if remaining <= 0:
+                raise VoiceError("TIMEOUT", f"no audio within {self.deadline:.0f} seconds")
+            pcm.append(self._pcm(part, min(self.timeout, remaining)))
+        return pcm_to_wav(b"".join(pcm), TTS_SAMPLE_RATE)
 
-    def _pcm(self, text: str) -> bytes:
+    def _pcm(self, text: str, timeout: float) -> bytes:
         body: dict[str, Any] = {
             "Text": text,
             "Voice": {"VoiceId": self.voice, "Speed": 1.0},
@@ -225,7 +234,7 @@ class TrtcTts:
         headers = tc3_headers(secret_id=self.secret_id, secret_key=self.secret_key, host=self.host,
                               action="TextToSpeech", version=TTS_VERSION, region=self.region,
                               payload=payload, timestamp=int(time.time()))
-        data = _post_json(self.http, f"https://{self.host}/", payload, headers, self.timeout)
+        data = _post_json(self.http, f"https://{self.host}/", payload, headers, timeout)
         response = data.get("Response") if isinstance(data, dict) else None
         if not isinstance(response, dict):
             raise VoiceError("BAD_RESPONSE", "no Response object")
@@ -331,7 +340,7 @@ def voice_from_env(environ: Mapping[str, str] | None = None) -> tuple[TrtcTts | 
         return (environ.get(key) or "").strip()
 
     app_id = get("GV_TRTC_SDK_APP_ID")
-    if not app_id.isdigit():
+    if not re.fullmatch(r"[0-9]+", app_id):
         return None, None
     tts = asr = None
     if get("GV_TENCENT_SECRET_ID") and get("GV_TENCENT_SECRET_KEY"):

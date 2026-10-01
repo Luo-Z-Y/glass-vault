@@ -22,7 +22,7 @@ switch the AI to rogue mode and show it still cannot move a cent.
 
 ```bash
 uv sync
-uv run pytest                          # ~1,150 tests
+uv run pytest                          # ~1,190 tests
 uv run python -m glassvault.demo       # CLI: signed happy path + 6 blocked attacks
 uv run python -m glassvault.web.server # web demo on http://localhost:8000
 uv run python -i scripts/playground.py # try to rob the gateway yourself
@@ -72,6 +72,7 @@ bank data and outcome rules, without seeing our prompts or cases.
 | `context.py` | What the LLM may see; untrusted text quarantined as `<REF_n>` | agent zone |
 | `llm.py`, `drafter.py` | OpenAI-compatible client; the drafter's prompt and tools | agent zone |
 | `offline.py` | Rule-based LLM stand-in for keyless demos | agent zone |
+| `voice.py` | Tencent RTC text-to-speech (the bank voice) and speech recognition (push-to-talk), for the web demo | demo |
 | `numbers.py` | Deterministic amount grammar ("a grand", "5k", "fifty bucks") | control plane |
 | `pipeline.py` | Provenance checks and the orchestration of every stage | control plane |
 | `evaluator.py` | Plan -> ResolvedPlan; all money arithmetic in Decimal | control plane |

@@ -103,7 +103,7 @@ FastAPI + Uvicorn process; the gateway can also run as its own service (see
 | AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
 | Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
 | Data | In-memory mock bank; the audit log is kept in memory, and the gateway service can also append it to a JSONL file |
-| Tooling | uv and hatchling, pytest (~1,150 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
+| Tooling | uv and hatchling, pytest (~1,190 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
 
 ## Codebase map
 
@@ -123,9 +123,9 @@ flowchart TB
             g_shared["🔗 Shared models<br/>schema.py · bank.py"]
             g_services["📁 services/<br/>gateway_api.py<br/>webauthn_verifier.py<br/>static/dev.html"]
             g_web["📁 web/ · demo server<br/>server.py"]
-            g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css"]
+            g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css · pcm-recorder.js"]
             g_evals["📁 evals/ · harness<br/>harness.py · dataset.py<br/>naive.py · __main__.py"]
-            g_demo["🎭 Demo + rogue AI<br/>demo.py · rogue.py"]
+            g_demo["🎭 Demo, rogue AI, voice<br/>demo.py · rogue.py<br/>voice.py (TRTC)"]
             g_agent ~~~ g_shared ~~~ g_evals
             g_control ~~~ g_services ~~~ g_demo
             g_gateway ~~~ g_web ~~~ g_static
@@ -134,7 +134,7 @@ flowchart TB
             direction TB
             r_evals["📁 evals/ · test cases<br/>cases.yaml · 84 cases<br/>heldout.yaml · 20 cases<br/>heldout2.yaml · 20 cases<br/>results/"]
             r_docs["📁 docs/<br/>architecture · contracts<br/>threat model · LLM choice<br/>WorkBuddy log"]
-            r_tests["📁 tests/<br/>21 modules<br/>~1,150 tests"]
+            r_tests["📁 tests/<br/>22 modules<br/>~1,190 tests"]
             r_project["⚙️ Project root<br/>README.md · uv.lock<br/>pyproject.toml<br/>.env.example<br/>scripts/playground.py"]
         end
         pkg ~~~ rest
@@ -383,24 +383,33 @@ attacks.
 ## Voice
 
 `voice.py` calls Tencent RTC from the server, so its keys never reach the
-browser. Each half is optional; without its settings, or if a call fails, the
-web demo uses the browser's own speech instead.
+browser. Each half is optional: without its settings the web demo uses the
+browser's own speech.
 
 - **The bank voice** is TRTC text-to-speech (`TrtcTts`, FlowTTS voice
   `v-female-p9Xy7Q1L`), a Tencent Cloud API 3.0 call signed with
   TC3-HMAC-SHA256. A script over the API's 255-character limit is split at
-  sentence breaks and joined back into one WAV. It speaks only scripts the
-  control plane rendered: the server keeps each confirmation or answer script
-  under its SHA-256 (for a confirmation, the `script_hash` the customer's
-  signature covers), and `GET /api/voice/{hash}` has no text input, so neither
-  the page nor the agent can make the bank voice say anything else. Audio is
-  cached by hash, so "Listen again" costs no credit.
+  sentence breaks and joined back into one WAV, within a 20-second deadline.
+  It speaks only scripts the control plane rendered: a confirmation (its key is
+  the `script_hash` the customer's signature covers) or an enquiry answer. Those
+  hold no LLM text, and no third party's words either: a statement line's
+  description is shown on screen, but the voice says only the payee's name from
+  records, the bank's own wording, or "money in" / "a payment out". The server
+  keeps each script under its SHA-256 and `GET /api/voice/{hash}` takes no
+  text, so the drafter cannot choose what the bank voice says. Audio is kept
+  with its script (the 64 most recent), so "Listen again" costs no credit, and
+  two requests for one script share one synthesis. If TRTC is off, fails, or
+  sends no audio within 8 seconds, the browser reads the same script.
 - **Push-to-talk** records 16 kHz mono audio in the browser and posts it to
-  `POST /api/asr`, which sends it to TRTC sentence recognition (`TrtcAsr`, the
-  `bigmodel` engine, English), authenticated with a UserSig signed for each
-  request. The text it returns is a `via="voice"` turn like any other: still
-  the customer's untrusted words, checked by the injection scan, provenance
-  and the validator.
+  `POST /api/asr` (`audio/wav` only), which sends it to TRTC sentence
+  recognition (`TrtcAsr`, the `bigmodel` engine, English), authenticated with a
+  UserSig signed for each request. The text it returns is a `via="voice"` turn
+  like any other: still the customer's untrusted words, checked by the
+  injection scan, provenance and the validator. If recognition fails, the page
+  says so, and later presses use the browser's own recognition where it has
+  one.
+- Both endpoints refuse calls from other sites (`Sec-Fetch-Site` and
+  `Origin`), since each call spends TRTC credit.
 
 Settings: `GV_TRTC_SDK_APP_ID`, `GV_TENCENT_SECRET_ID` and
 `GV_TENCENT_SECRET_KEY` turn on the voice; `GV_TRTC_SDK_APP_ID` and
@@ -451,6 +460,9 @@ money moving before the audit write, and unaudited non-gateway errors.
 - The web demo runs every zone in one process (see [Processes](#processes)).
 - Speech recognition runs through the web demo's server, which sits with the
   agent zone; a real deployment would transcribe on the device or in the
-  control plane. `/api/voice` and `/api/asr` are not rate-limited, and the TRTC
-  services need activating on the account (recognition is not in the free
-  trial).
+  control plane. `/api/voice` and `/api/asr` refuse other sites (by
+  `Sec-Fetch-Site` and `Origin`; an old browser that sends neither, or a DNS
+  rebinding attack, is not covered) but are not rate-limited, and the TRTC services need activating on the account
+  (recognition is not in the free trial). The customer's page sits in the
+  trusted device zone: a compromised page could replay a recent bank script or
+  speak in its own voice.

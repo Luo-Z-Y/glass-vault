@@ -131,3 +131,18 @@ def test_a_rogue_drafter_cannot_turn_an_enquiry_into_money_movement(bank, gatewa
     o = Pipeline(LocalGatewayPort(gateway), RogueLLM(honest, "extra_transfer", bank.view()), honest).handle(
         [Turn(role="customer", text="How much money do I have?")])
     assert o.kind == "answer" and o.challenge is None
+
+
+def test_the_bank_voice_never_reads_a_third_partys_words(bank, gateway, phone, clock):
+    """Statement descriptions can be written by anyone who sends money; the voice says bank wording only."""
+    plan = resolve(Plan(steps=[PayNowTransfer(id="t1", from_account="SAV", payee_id="P_MUM",
+                                              amount=FixedAmount(value=Decimal("300")))]), bank.view(), now=clock.now)
+    challenge = gateway.issue_challenge(plan)
+    gateway.execute(nonce=challenge.nonce, signature=phone.sign(challenge_digest(challenge)))
+    result = answer(Enquiry(kind="transactions", limit=10), bank.view(), gateway.history())
+    spoken = result.spoken_script
+    assert "PayNow to Tan Mei Ling" in spoken  # a payee's name, from bank records
+    assert "money in" in spoken and "a payment out" in spoken
+    for third_party in ("SALARY", "GLOBEX", "NTUC", "ALI BIN AHMAD", "GIRO", INJECTION):
+        assert third_party not in spoken
+    assert any("SALARY GLOBEX PTE LTD" in line for line in result.lines)  # still on screen

@@ -3,8 +3,10 @@
 The drafter only chooses which question the customer asked (an `Enquiry`). Every
 number and line here comes from the bank's records, in fixed wording, so an LLM
 can never misstate a balance. Statement descriptions can be written by third
-parties (a sender's PayNow reference), so they never reach an LLM, and any that
-read like instructions are withheld from the screen and the voice as well.
+parties (a sender's PayNow reference), so they never reach an LLM, any that
+read like instructions are withheld from the screen, and the bank voice never
+reads one out: it says the payee's name from records, the bank's own wording,
+or just "money in" / "a payment out".
 Nothing here can move money: answers need no signature and never touch the ledger.
 """
 
@@ -22,7 +24,6 @@ if TYPE_CHECKING:  # the answerer only reads executions
     from .gateway import Execution
 
 WITHHELD = "[description withheld: it contains instructions]"
-WITHHELD_SPOKEN = "a transaction whose description I can't read out"
 
 
 def answer(enquiry: Enquiry, view: BankView, history: Sequence[Execution]) -> EnquiryAnswer:
@@ -61,16 +62,27 @@ def _transactions(enquiry: Enquiry, view: BankView, history: Sequence[Execution]
         f"{t.on:%d %b}  {_safe(t.description)}  {'+' if t.amount > 0 else '-'}S${abs(t.amount):,.2f}" for t in rows
     )
     spoken = f"Your last {len(rows)} transaction{'s' if len(rows) != 1 else ''}. " + " ".join(
-        f"{t.on:%d %B}: {_safe(t.description, spoken=True)}, {spell_amount(abs(t.amount))} "
+        f"{t.on:%d %B}: {_spoken(t, view)}, {spell_amount(abs(t.amount))} "
         f"{'in' if t.amount > 0 else 'out'}." for t in rows
     )
     return EnquiryAnswer(lines=lines, spoken_script=spoken)
 
 
-def _safe(description: str, *, spoken: bool = False) -> str:
+def _safe(description: str) -> str:
+    """A description for the screen: withheld if it reads like instructions, else sanitised."""
     if scan_text(description, data_field=True):
-        return WITHHELD_SPOKEN if spoken else WITHHELD
+        return WITHHELD
     return sanitize_label(description, max_len=60)
+
+
+def _spoken(t: Transaction, view: BankView) -> str:
+    """What the bank voice says for a line: never a third party's free text, which stays on screen."""
+    payee = view.payees.get(t.payee_id or "")
+    if payee is not None:
+        return f"PayNow to {payee.legal_name}"
+    if t.bank_text:
+        return t.description
+    return "money in" if t.amount > 0 else "a payment out"
 
 
 def _from_execution(execution: Execution, view: BankView) -> Transaction:
@@ -91,4 +103,5 @@ def _from_execution(execution: Execution, view: BankView) -> Transaction:
         description=description,
         amount=-step.amount,
         payee_id=step.to if step.type == "paynow" else None,
+        bank_text=True,
     )

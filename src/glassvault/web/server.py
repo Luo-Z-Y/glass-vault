@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -94,9 +96,12 @@ class Demo:
     funds_moved: Decimal = Decimal("0.00")
     tts: TrtcTts | None = None  # the bank voice; None: the browser speaks
     asr: TrtcAsr | None = None  # push-to-talk; None: the browser transcribes
-    # The only words the bank voice may say: scripts the control plane rendered, by SHA-256.
+    # The only words the bank voice may say: scripts the control plane rendered, by SHA-256, with their
+    # audio once synthesised (so "Listen again" costs no credit). Evicted together, oldest first.
     scripts: OrderedDict[str, str] = field(default_factory=OrderedDict)
-    audio: OrderedDict[str, bytes] = field(default_factory=OrderedDict)  # synthesised scripts, to save credit
+    audio: dict[str, bytes] = field(default_factory=dict)
+    voice_lock: threading.Lock = field(default_factory=threading.Lock)
+    synthesising: dict[str, threading.Lock] = field(default_factory=dict)  # per script: one TRTC call at a time
 
     @property
     def pipeline(self) -> Pipeline:
@@ -202,10 +207,13 @@ def speech(o: Outcome) -> str | None:
     if not script:
         return None
     key = hashlib.sha256(script.encode("utf-8")).hexdigest()  # equals the confirmation's script_hash
-    demo.scripts[key] = script
-    demo.scripts.move_to_end(key)
-    while len(demo.scripts) > MAX_SCRIPTS:
-        demo.scripts.popitem(last=False)
+    with demo.voice_lock:
+        demo.scripts[key] = script
+        demo.scripts.move_to_end(key)
+        while len(demo.scripts) > MAX_SCRIPTS:
+            old, _ = demo.scripts.popitem(last=False)
+            demo.audio.pop(old, None)
+            demo.synthesising.pop(old, None)
     return key
 
 
@@ -309,47 +317,70 @@ def message(req: MessageRequest) -> dict[str, Any]:
 # --- Voice (TRTC) -----------------------------------------------------------------------
 
 
-MAX_AUDIO = 16
+def _refusal(code: str, status: int, message: str) -> JSONResponse:
+    return JSONResponse({"code": code, "status": status, "message": message}, status_code=status)
 
 
-def _voice_error(e: VoiceError, status: int = 502) -> JSONResponse:
-    return JSONResponse({"code": e.code, "status": status, "message": e.message}, status_code=status)
+def _cross_site(request: Request) -> JSONResponse | None:
+    """Refuse a call from another site: these endpoints spend TRTC credit."""
+    site = request.headers.get("sec-fetch-site")
+    origin = request.headers.get("origin")
+    # Hosts, not schemes (behind an HTTPS proxy the page's scheme differs from the server's), and the
+    # configured public origin as well as the Host header (a proxy may rewrite Host).
+    own = {request.headers.get("host", ""), urlsplit(ORIGIN).netloc}
+    if site not in (None, "same-origin", "none") or (origin is not None and urlsplit(origin).netloc not in own):
+        return _refusal("CROSS_SITE", 403, "only this page may use the bank's voice")
+    return None
 
 
 @app.get("/api/voice/{script_hash}")
-def voice(script_hash: str):
+def voice(script_hash: str, request: Request):
     """A bank-rendered script in the bank's TRTC voice, as WAV. It speaks nothing else: there is no text input."""
+    if (refused := _cross_site(request)) is not None:
+        return refused
     if demo.tts is None:
-        return JSONResponse({"code": "VOICE_OFF", "status": 404, "message": "TRTC voice is not set up"}, 404)
-    script = demo.scripts.get(script_hash)
+        return _refusal("VOICE_OFF", 404, "TRTC voice is not set up")
+    with demo.voice_lock:
+        script = demo.scripts.get(script_hash)
+        audio = demo.audio.get(script_hash)
+        if script is not None and audio is None:
+            busy = demo.synthesising.setdefault(script_hash, threading.Lock())  # kept as long as the script
     if script is None:
-        return JSONResponse({"code": "UNKNOWN_SCRIPT", "status": 404, "message": "not a script the bank rendered"}, 404)
-    audio = demo.audio.get(script_hash)
+        return _refusal("UNKNOWN_SCRIPT", 404, "not a script the bank rendered")
     if audio is None:
         try:
-            audio = demo.tts.synthesize(script)
+            with busy:  # a second request for the same script waits for the first one's audio
+                with demo.voice_lock:
+                    audio = demo.audio.get(script_hash)
+                if audio is None:
+                    audio = demo.tts.synthesize(script)
+                    with demo.voice_lock:
+                        if script_hash in demo.scripts:  # not evicted meanwhile
+                            demo.audio[script_hash] = audio
         except VoiceError as e:
-            return _voice_error(e)
-        demo.audio[script_hash] = audio
-        while len(demo.audio) > MAX_AUDIO:
-            demo.audio.popitem(last=False)
+            return _refusal(e.code, 502, e.message)
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=600"})
 
 
 @app.post("/api/asr")
 async def transcribe(request: Request):
     """One push-to-talk recording (mono 16-bit 16 kHz WAV) as text, by TRTC speech recognition."""
+    if (refused := _cross_site(request)) is not None:
+        return refused
     if demo.asr is None:
-        return JSONResponse({"code": "ASR_OFF", "status": 404, "message": "TRTC speech recognition is not set up"}, 404)
+        return _refusal("ASR_OFF", 404, "TRTC speech recognition is not set up")
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "audio/wav":
+        # Not a type a form or a no-cors fetch can send, so another site's page cannot post here unasked.
+        return _refusal("BAD_AUDIO", 415, "send the recording as audio/wav")
     body = bytearray()
     async for chunk in request.stream():
         body += chunk
         if len(body) > ASR_MAX_BYTES:
-            return JSONResponse({"code": "AUDIO_TOO_LONG", "status": 413, "message": "recording too long"}, 413)
+            return _refusal("AUDIO_TOO_LONG", 413, "recording too long")
     try:
         text = await run_in_threadpool(demo.asr.transcribe, bytes(body))
     except VoiceError as e:
-        return _voice_error(e, 400 if e.code in ("BAD_AUDIO", "AUDIO_TOO_LONG") else 502)
+        return _refusal(e.code, 400 if e.code in ("BAD_AUDIO", "AUDIO_TOO_LONG") else 502, e.message)
     return {"text": text}
 
 

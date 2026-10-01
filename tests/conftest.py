@@ -27,6 +27,15 @@ class FakeClock:
         self.now += timedelta(**kwargs)
 
 
+@pytest.fixture(autouse=True)
+def no_trtc(monkeypatch):
+    """No test may reach Tencent: TRTC settings exported in the shell are hidden from every test."""
+    import os
+
+    for key in [k for k in os.environ if k.startswith(("GV_TRTC_", "GV_TENCENT_"))]:
+        monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def clock() -> FakeClock:
     """Starts at a fixed moment, so the seed bank's dates and every expiry are the same on each run."""
