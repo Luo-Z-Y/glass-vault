@@ -100,10 +100,16 @@ def test_pcm_round_trips_through_wav():
         assert w.readframes(4) == pcm
 
 
+def _corrupt_fmt_size(wav: bytes) -> bytes:
+    return wav[:16] + struct.pack("<I", 0xF8) + wav[20:]  # a 'fmt ' chunk that claims 248 bytes
+
+
 @pytest.mark.parametrize("wav", [
     pcm_to_wav(b"\0\0" * 10, 8000),
     pcm_to_wav(b"\0\0\0\0" * 10, 16000, channels=2),
     b"RIFF....not a wav",
+    _corrupt_fmt_size(pcm_to_wav(b"\1\0" * 100, 16000)),
+    pcm_to_wav(b"\1\0" * 100, 16000)[:30],
 ])
 def test_only_mono_16_bit_16_khz_wav_is_accepted(wav):
     with pytest.raises(VoiceError) as e:
@@ -164,6 +170,17 @@ def test_tts_failures_become_voice_errors(reply, code):
     with pytest.raises(VoiceError) as e:
         tts.synthesize("Hello.")
     assert e.value.code == code
+
+
+def test_a_slow_trtc_gives_up_within_the_deadline(monkeypatch):
+    import glassvault.voice as voice_module
+
+    clock = iter([0.0, 0.0, 25.0])  # the second part would start after the 20-second deadline
+    monkeypatch.setattr(voice_module.time, "monotonic", lambda: next(clock))
+    tts, seen = tts_with(audio_reply)
+    with pytest.raises(VoiceError) as e:
+        tts.synthesize("First sentence. " + "word " * 60 + "Second sentence.")
+    assert e.value.code == "TIMEOUT" and len(seen) == 1
 
 
 def test_an_unreachable_tts_is_a_voice_error():
@@ -243,6 +260,7 @@ def test_asr_refuses_long_or_malformed_audio_before_calling_trtc():
 def test_voice_services_need_their_own_keys():
     assert voice_from_env({}) == (None, None)
     assert voice_from_env({"GV_TRTC_SDK_APP_ID": "not-a-number", "GV_TRTC_SDK_SECRET_KEY": "k"}) == (None, None)
+    assert voice_from_env({"GV_TRTC_SDK_APP_ID": "\u0661\u0662\u0663", "GV_TRTC_SDK_SECRET_KEY": "k"}) == (None, None)
     tts, asr = voice_from_env({"GV_TRTC_SDK_APP_ID": "1400000000", "GV_TENCENT_SECRET_ID": "id",
                                "GV_TENCENT_SECRET_KEY": "key"})
     assert tts and tts.sdk_app_id == 1400000000 and asr is None
@@ -334,3 +352,37 @@ def test_push_to_talk_without_trtc_is_refused(server):
     with TestClient(server.app) as client:
         response = client.post("/api/asr", content=SPEECH)
     assert response.status_code == 404 and response.json()["code"] == "ASR_OFF"
+
+
+def test_another_site_cannot_spend_the_trtc_credit(server):
+    server.demo.tts, server.demo.asr = FakeTts(), FakeAsr()
+    with TestClient(server.app) as client:
+        key = client.post("/api/message", json={"text": "How much money do I have?"}).json()["outcome"]["speech"]
+        cross = {"sec-fetch-site": "cross-site"}
+        voice = client.get(f"/api/voice/{key}", headers=cross)
+        asr = client.post("/api/asr", content=SPEECH, headers={"content-type": "audio/wav", **cross})
+        other_origin = client.post("/api/asr", content=SPEECH,
+                                   headers={"content-type": "audio/wav", "origin": "https://evil.example"})
+        plain = client.post("/api/asr", content=SPEECH, headers={"content-type": "text/plain"})
+        same = client.post("/api/asr", content=SPEECH, headers={"content-type": "audio/wav",
+                                                                 "sec-fetch-site": "same-origin",
+                                                                 "origin": "http://testserver"})
+    assert [r.status_code for r in (voice, asr, other_origin)] == [403, 403, 403]
+    assert plain.status_code == 415  # a type no form or no-cors fetch can send
+    assert same.status_code == 200
+
+
+def test_listen_again_is_free_while_the_script_is_remembered(server, monkeypatch):
+    tts = FakeTts()
+    server.demo.tts = tts
+    monkeypatch.setattr(server, "MAX_SCRIPTS", 2)
+    with TestClient(server.app) as client:
+        keys = []
+        for text in ("How much money do I have?", "show me my recent transactions", "what's the balance in my joint account"):
+            keys.append(client.post("/api/message", json={"text": text}).json()["outcome"]["speech"])
+            client.get(f"/api/voice/{keys[-1]}")
+            client.get(f"/api/voice/{keys[-1]}")
+        oldest = client.get(f"/api/voice/{keys[0]}")
+    assert len(tts.spoken) == 3  # each script synthesised once, however often it is played
+    assert oldest.status_code == 404  # forgotten with its audio once newer scripts push it out
+    assert set(server.demo.audio) <= set(server.demo.scripts) and len(server.demo.scripts) == 2

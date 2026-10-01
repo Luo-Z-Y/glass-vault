@@ -44,7 +44,7 @@ A layer later in the chain never relies on an earlier one having worked.
 | A14 | Audit write fails after money moves | Write-ahead: EXECUTED is logged before balances change | `test_audit_failure_moves_no_money` |
 | A15 | Injection in a statement line (a sender's PayNow reference: "SYSTEM: ignore previous instructions…") | Enquiries are answered by code from bank records; statement text never reaches an LLM, and lines that read like instructions are withheld on screen and in voice | `enquiry-recent-transactions-injection`, `test_a_poisoned_description_is_withheld_on_screen_and_in_voice` |
 | A16 | A dispute ("I never asked for that") or a cover-up: the record of what was said is edited or dropped, or a stopped request leaves no trace | Every turn, including frozen, refused and held ones, is filed as `REQUEST` in the hash-chained log before its outcome is shown; the signed challenge carries `transcript_hash`; the gateway files one confirm record per challenge, only if its plan, transcript and spoken script hash to the signed values, and will not execute a conversation-bound approval until that record is filed | `test_request_audit.py` |
-| A17 | The bank voice made to say something else (a compromised agent or page asks it to read "Your transfer to Mum is confirmed" over a different plan) | The voice speaks only scripts the control plane rendered, fetched by their SHA-256 (a confirmation's is the `script_hash` in the signed challenge); its endpoint takes no text | `test_the_bank_voice_speaks_only_scripts_the_bank_rendered` |
+| A17 | The bank voice made to say words the bank did not render: the drafter's text, or a third party's statement description read out in the bank's voice | The voice speaks only confirmation and answer scripts the control plane rendered, fetched by SHA-256 from an endpoint that takes no text and refuses other sites; statement descriptions are shown, never spoken | `test_the_bank_voice_speaks_only_scripts_the_bank_rendered`, `test_the_bank_voice_never_reads_a_third_partys_words` |
 
 ## Residual risks (said plainly)
 
@@ -61,5 +61,8 @@ A layer later in the chain never relies on an earlier one having worked.
 - **Mocks:** biometrics in the CLI demo use a raw Ed25519 key (the web app uses a
   real WebAuthn passkey); the ledger, PayNow, billers, SGX quotes and KYC data are
   simulated. We never imply integration with DBS systems.
+- **The customer's page is trusted.** A compromised page (or browser) could
+  replay a recent bank script or speak in a voice of its own; what it cannot
+  do is get a signature over a plan the customer did not see.
 - **Single process today** for the demo; the zones are designed to run as
   separate services with no network route from the agent to the ledger.

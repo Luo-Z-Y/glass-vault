@@ -134,6 +134,7 @@ class Transaction:
     description: str
     amount: Decimal  # negative: money out
     payee_id: str | None = None  # set for a PayNow to a saved payee
+    bank_text: bool = False  # the description was written by the bank (an execution), not a third party
 
 
 @dataclass(frozen=True)
