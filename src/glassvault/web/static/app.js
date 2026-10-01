@@ -109,7 +109,7 @@ function renderAnswer(o) {
     node.appendChild(row);
     if (cells.length === 3) node.classList.add("statement");
   }
-  if (lastInputWasVoice && o.answer?.spoken_script) speakBankVoice(o.answer.spoken_script, o.speech);
+  if (lastInputWasVoice && o.answer?.spoken_script) speakBankVoice(o.answer.spoken_script, o.speech, "answer");
 }
 
 function renderConfirm(o) {
@@ -150,7 +150,7 @@ function renderConfirm(o) {
   if (!usePasskey) approve.textContent = state?.passkey?.simulated_allowed ? "Approve (simulated Face ID)" : "Set up Face ID first";
   approve.disabled = !usePasskey && !state?.passkey?.simulated_allowed;
   approve.addEventListener("click", () => approveChallenge(o, card));
-  card.querySelector(".listen").addEventListener("click", () => speakBankVoice(o.confirmation.spoken_script, o.speech));
+  card.querySelector(".listen").addEventListener("click", () => speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation"));
   card.querySelector(".cancel").addEventListener("click", () => {
     card.remove();
     cancel();
@@ -160,7 +160,7 @@ function renderConfirm(o) {
   wrap.appendChild(el("div", "", o.message));
   wrap.appendChild(card);
   chat.appendChild(wrap);
-  if (lastInputWasVoice) speakBankVoice(o.confirmation.spoken_script, o.speech);
+  if (lastInputWasVoice) speakBankVoice(o.confirmation.spoken_script, o.speech, "confirmation");
 }
 
 // ---------------------------------------------------------------------------
@@ -237,15 +237,29 @@ function renderLLM(llm) {
   }
 }
 
-// The voice panel: who speaks for the bank and who listens, TRTC or the browser.
+// The Voice service panel: Tencent RTC hears push-to-talk and speaks the bank's scripts;
+// the browser stands in for whichever of the two is not set up.
 function renderVoice(voice) {
-  const speak = voice?.speak || {};
   const listen = voice?.listen || {};
-  const live = speak.engine === "trtc" || listen.engine === "trtc";
-  $("#voice-status").textContent = live ? "TRTC" : "Browser";
-  $("#voice-status").className = `pill ${live ? "ok" : ""}`;
-  $("#voice-speak").textContent = speak.engine === "trtc" ? speak.name : "Browser voice";
-  $("#voice-listen").textContent = `Listening: ${listen.engine === "trtc" ? listen.name : "browser speech recognition"}`;
+  const speak = voice?.speak || {};
+  const onTrtc = [listen, speak].filter((v) => v.engine === "trtc").length;
+  const status = $("#voice-status");
+  status.textContent = ["Browser fallback", "Partly TRTC", "Tencent RTC"][onTrtc];
+  status.className = `pill ${onTrtc ? "ok" : ""}`;
+  $("#voice-note").hidden = onTrtc === 2;
+  const trtcListen = listen.engine === "trtc";
+  $("#asr-name").textContent = trtcListen ? (listen.model ? `TRTC ASR · ${listen.model}` : listen.name) : "Browser speech recognition";
+  $("#asr-host").textContent = trtcListen ? [listen.host, listen.language].filter(Boolean).join(" · ") : "on this device";
+  const trtcSpeak = speak.engine === "trtc";
+  $("#tts-name").textContent = trtcSpeak ? (speak.voice ? `TRTC FlowTTS · ${speak.voice}` : speak.name) : "Browser voice";
+  $("#tts-host").textContent = trtcSpeak ? [speak.host, speak.region].filter(Boolean).join(" · ") : "on this device";
+}
+
+// One line of live activity on a voice card ("asr" or "tts"): what it is doing now, or did last.
+function voiceActivity(card, mode, text) {
+  const line = $(`#${card}-activity`);
+  line.className = `voice-activity ${mode}`;
+  line.textContent = text;
 }
 
 function renderState(s) {
@@ -277,7 +291,8 @@ function renderState(s) {
 async function send(text) {
   text = text.trim();
   if (!text) return;
-  addMsg("customer", text);
+  const bubble = addMsg("customer", text);
+  if (lastInputWasVoice) bubble.classList.add("via-voice");
   input.value = "";
   renderStages([]);
   renderDiff(null);
@@ -464,6 +479,7 @@ function setupMic() {
       return;
     }
     session = trtc ? recordForTrtc() : listenInBrowser();
+    voiceActivity("asr", "live", "Listening…");
     mic.classList.add("listening");
     phone.classList.add("mic-on");
     limit = setTimeout(stop, MAX_RECORDING_MS);
@@ -482,8 +498,11 @@ function listenInBrowser() {
   };
   recognition.onend = () => {
     if (input.value.trim()) {
+      voiceActivity("asr", "done", `Heard “${input.value.trim()}”`);
       lastInputWasVoice = true;
       send(input.value);
+    } else {
+      voiceActivity("asr", "idle", "Heard nothing");
     }
   };
   recognition.start();
@@ -514,6 +533,7 @@ function recordForTrtc() {
       try {
         await ready;
       } catch (err) {
+        voiceActivity("asr", "error", "The microphone is not available");
         addMsg("system", `The microphone is not available (${err.message}). You can type instead.`);
         return;
       } finally {
@@ -521,7 +541,7 @@ function recordForTrtc() {
       }
       const rate = ctx.sampleRate;
       await ctx.close();
-      if (held < 330 || !chunks.length) return;
+      if (held < 330 || !chunks.length) return voiceActivity("asr", "idle", "Too short to send");
       await transcribeWithTrtc(wav16k(chunks, rate));
     },
   };
@@ -532,17 +552,21 @@ async function transcribeWithTrtc(wav) {
   const hint = input.placeholder;
   input.placeholder = "Transcribing…";
   mic.disabled = true;
+  voiceActivity("asr", "live", "Transcribing with Tencent RTC…");
   try {
     const res = await fetch("/api/asr", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || res.statusText);
     if (data.text?.trim()) {
+      voiceActivity("asr", "done", `Heard “${data.text.trim()}”`);
       lastInputWasVoice = true;
       send(data.text);
     } else {
+      voiceActivity("asr", "idle", "Heard nothing");
       addMsg("system", "I didn't catch anything. Hold the mic and try again, or type.");
     }
   } catch (err) {
+    voiceActivity("asr", "error", `Couldn't transcribe: ${err.message}`);
     addMsg("system", `Couldn't transcribe that (${err.message}). You can type instead.`);
   } finally {
     input.placeholder = hint;
@@ -614,29 +638,32 @@ function chime() {
 
 let speaking = null;
 
-// The bank voice reads a script the bank rendered. With TRTC it fetches the audio by the
-// script's SHA-256, so this page cannot make the voice say anything else; if TRTC is off or
-// fails, the browser reads the same script. The island shows the voice while it speaks; Face ID
-// takes the island over if an approval starts meanwhile.
-function speakBankVoice(script, key) {
+// The bank voice reads a script the bank rendered (`kind`: "confirmation" or "answer"). With
+// TRTC it fetches the audio by the script's SHA-256, so this page cannot make the voice say
+// anything else; if TRTC is off or fails, the browser reads the same script. The island shows
+// the voice while it speaks; Face ID takes the island over if an approval starts meanwhile.
+function speakBankVoice(script, key, kind = "script") {
   stopSpeaking();
   chime();
   const turn = {};
   speaking = turn;
+  const what = `the ${kind}${key ? ` · sha256 ${key.slice(0, 12)}…` : ""}`;
+  voiceActivity("tts", "live", `Speaking ${what}`);
   const done = () => {
     if (speaking !== turn) return;
     speaking = null;
     if (island.dataset.mode === "voice") setIsland(null);
+    if (turn.fellBack) voiceActivity("tts", "error", `Tencent RTC unavailable; the browser read ${what}`);
+    else voiceActivity("tts", "done", `Spoke ${what}`);
   };
   if (!island.dataset.mode) setIsland("voice");
   setTimeout(done, 4000 + script.length * 120); // for players that never report the end
   if (key && state?.voice?.speak?.engine === "trtc") {
     const audio = new Audio(`/api/voice/${key}`); // starts fetching during the chime
     turn.audio = audio;
-    let fellBack = false;
     const fallBack = () => {
-      if (fellBack || speaking !== turn) return;
-      fellBack = true;
+      if (turn.fellBack || speaking !== turn) return;
+      turn.fellBack = true;
       speakInBrowser(script, turn, done, 0);
     };
     audio.onended = done;

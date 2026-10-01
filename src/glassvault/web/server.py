@@ -42,7 +42,7 @@ from ..rogue import ATTACKS, RogueLLM
 from ..schema import Challenge, FixedAmount, PayNowTransfer, Plan, Turn
 from ..services.webauthn_verifier import WebAuthnVerifier
 from ..stepup import DigitalToken, StepUpVerifier
-from ..voice import ASR_MAX_BYTES, TrtcAsr, TrtcTts, VoiceError, voice_from_env
+from ..voice import ASR_MAX_BYTES, TTS_VOICE, TTS_VOICE_LABEL, TrtcAsr, TrtcTts, VoiceError, voice_from_env
 
 STATIC = Path(__file__).parent / "static"
 PORT = int(os.environ.get("GV_PORT") or os.environ.get("PORT") or "8000")
@@ -170,9 +170,27 @@ def state_json() -> dict[str, Any]:
         "passkey": {"registered": demo.verifier.has_passkey(customer),
                     "simulated_allowed": not demo.verifier.has_passkey(customer)},
         "attacks": {"blocked": demo.blocked, "funds_moved": str(demo.funds_moved)},
-        "voice": {"speak": {"engine": "trtc" if demo.tts else "browser", "name": demo.tts.name if demo.tts else None},
-                  "listen": {"engine": "trtc" if demo.asr else "browser", "name": demo.asr.name if demo.asr else None}},
+        "voice": voice_json(),
     }
+
+
+def voice_json() -> dict[str, Any]:
+    """Who listens and who speaks for the bank: TRTC where it is set up, otherwise the browser.
+
+    Beyond the engine and name, the details are for display only, so a voice that lacks them
+    (a test double, say) still works: the page shows its name instead.
+    """
+    tts, asr = demo.tts, demo.asr
+    speak: dict[str, Any] = {"engine": "browser", "name": None}
+    if tts:
+        voice = getattr(tts, "voice", None)
+        speak = {"engine": "trtc", "name": tts.name, "host": getattr(tts, "host", None),
+                 "region": getattr(tts, "region", None), "voice": TTS_VOICE_LABEL if voice == TTS_VOICE else voice}
+    listen: dict[str, Any] = {"engine": "browser", "name": None}
+    if asr:
+        listen = {"engine": "trtc", "name": asr.name, "host": getattr(asr, "host", None),
+                  "model": getattr(asr, "engine", None), "language": getattr(asr, "language", None) or "auto"}
+    return {"speak": speak, "listen": listen}
 
 
 MAX_SCRIPTS = 64

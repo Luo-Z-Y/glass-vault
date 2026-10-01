@@ -39,7 +39,8 @@ import httpx
 TTS_HOST = "trtc.intl.tencentcloudapi.com"  # international site; trtc.tencentcloudapi.com on the China site
 TTS_REGION = "ap-singapore"
 TTS_VERSION = "2019-07-22"
-TTS_VOICE = "v-female-p9Xy7Q1L"  # "Articulate Narrator": neutral, steady, clear
+TTS_VOICE = "v-female-p9Xy7Q1L"
+TTS_VOICE_LABEL = "Articulate Narrator"  # neutral, steady, clear
 TTS_MAX_CHARS = 255  # per request; a CJK ideograph counts as 2
 TTS_SAMPLE_RATE = 24000
 
