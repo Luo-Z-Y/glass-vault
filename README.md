@@ -72,7 +72,7 @@ bank data and outcome rules, without seeing our prompts or cases.
 | `context.py` | What the LLM may see; untrusted text quarantined as `<REF_n>` | agent zone |
 | `llm.py`, `drafter.py` | OpenAI-compatible client; the drafter's prompt and tools | agent zone |
 | `offline.py` | Rule-based LLM stand-in for keyless demos | agent zone |
-| `voice.py` | Tencent RTC text-to-speech (the bank voice) and speech recognition (push-to-talk) | demo server |
+| `voice.py` | Tencent RTC text-to-speech (the bank voice) and speech recognition (push-to-talk), for the web demo | demo |
 | `numbers.py` | Deterministic amount grammar ("a grand", "5k", "fifty bucks") | control plane |
 | `pipeline.py` | Provenance checks and the orchestration of every stage | control plane |
 | `evaluator.py` | Plan -> ResolvedPlan; all money arithmetic in Decimal | control plane |

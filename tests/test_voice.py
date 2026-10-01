@@ -386,3 +386,28 @@ def test_listen_again_is_free_while_the_script_is_remembered(server, monkeypatch
     assert len(tts.spoken) == 3  # each script synthesised once, however often it is played
     assert oldest.status_code == 404  # forgotten with its audio once newer scripts push it out
     assert set(server.demo.audio) <= set(server.demo.scripts) and len(server.demo.scripts) == 2
+
+
+def test_the_configured_public_origin_is_this_site_even_behind_a_proxy(server, monkeypatch):
+    server.demo.asr = FakeAsr()
+    monkeypatch.setattr(server, "ORIGIN", "https://vault.example.com")
+    with TestClient(server.app) as client:  # the proxy rewrote Host to the internal address
+        behind_proxy = client.post("/api/asr", content=SPEECH, headers={
+            "content-type": "audio/wav", "origin": "https://vault.example.com", "host": "127.0.0.1:8000"})
+    assert behind_proxy.status_code == 200
+
+
+def test_a_failed_synthesis_keeps_one_lock_per_script(server):
+    class FailsOnce(FakeTts):
+        def synthesize(self, script):
+            if not self.spoken:
+                self.spoken.append("failed")
+                raise VoiceError("InternalError", "try again")
+            return super().synthesize(script)
+
+    server.demo.tts = FailsOnce()
+    with TestClient(server.app) as client:
+        key = client.post("/api/message", json={"text": "How much money do I have?"}).json()["outcome"]["speech"]
+        failed, retried = client.get(f"/api/voice/{key}"), client.get(f"/api/voice/{key}")
+    assert (failed.status_code, retried.status_code) == (502, 200)
+    assert list(server.demo.synthesising) == [key]  # the same lock serves every later request

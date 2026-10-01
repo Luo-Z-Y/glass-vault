@@ -260,7 +260,8 @@ Each gateway error code and the attack it stops are listed in
 ## voice.py: TRTC text-to-speech and speech recognition
 
 ```python
-class TrtcTts:      # TrtcTts(sdk_app_id, secret_id, secret_key, *, voice, host, region, model, language, http)
+class TrtcTts:      # TrtcTts(sdk_app_id, secret_id, secret_key, *, voice, host, region, model, language,
+                    #         timeout=10.0 per request, deadline=20.0 per script, http)
     def synthesize(self, script: str) -> bytes   # one WAV (mono, 16-bit, 24 kHz); parts of <= 255 chars
 class TrtcAsr:      # TrtcAsr(sdk_app_id, sdk_secret_key, *, host, language="en", engine="bigmodel", http)
     def transcribe(self, wav: bytes) -> str      # mono 16-bit 16 kHz WAV, <= 60 s and 2 MB
@@ -270,7 +271,8 @@ def tc3_headers(*, secret_id, secret_key, host, action, version, region, payload
 def user_sig(sdk_app_id, sdk_secret_key, identifier, *, expire=86400, now=None) -> str   # TLSSigAPIv2
 ```
 The web demo exposes them as `GET /api/voice/{script_hash}` (only scripts the
-control plane rendered) and `POST /api/asr` (a WAV body; returns `{text}`).
+control plane rendered; 404 otherwise) and `POST /api/asr` (an `audio/wav` body,
+else 415; returns `{text}`). Both answer 403 to a call from another site.
 
 ## services/: HTTP split (agent zone vs gateway zone)
 

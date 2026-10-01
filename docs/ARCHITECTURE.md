@@ -117,12 +117,12 @@ flowchart TB
         direction TB
         subgraph pkg["📁 src/glassvault/ · the Python package"]
             direction TB
-            g_agent["🤖 Agent zone<br/>context.py · llm.py<br/>drafter.py · offline.py<br/>voice.py (TRTC)"]
+            g_agent["🤖 Agent zone<br/>context.py · llm.py<br/>drafter.py · offline.py"]
             g_control["🧮 Control plane<br/>numbers.py · pipeline.py<br/>evaluator.py · policy.py<br/>validator.py · renderer.py"]
             g_gateway["🏦 Gateway<br/>gateway.py · audit.py<br/>crypto.py · stepup.py"]
             g_shared["🔗 Shared models<br/>schema.py · bank.py"]
             g_services["📁 services/<br/>gateway_api.py<br/>webauthn_verifier.py<br/>static/dev.html"]
-            g_web["📁 web/ · demo server<br/>server.py"]
+            g_web["📁 web/ · demo server<br/>server.py<br/>+ voice.py (TRTC)"]
             g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css · pcm-recorder.js"]
             g_evals["📁 evals/ · harness<br/>harness.py · dataset.py<br/>naive.py · __main__.py"]
             g_demo["🎭 Demo + rogue AI<br/>demo.py · rogue.py"]
@@ -460,8 +460,9 @@ money moving before the audit write, and unaudited non-gateway errors.
 - The web demo runs every zone in one process (see [Processes](#processes)).
 - Speech recognition runs through the web demo's server, which sits with the
   agent zone; a real deployment would transcribe on the device or in the
-  control plane. `/api/voice` and `/api/asr` refuse other sites but are not
-  rate-limited, and the TRTC services need activating on the account
+  control plane. `/api/voice` and `/api/asr` refuse other sites (by
+  `Sec-Fetch-Site` and `Origin`; an old browser that sends neither, or a DNS
+  rebinding attack, is not covered) but are not rate-limited, and the TRTC services need activating on the account
   (recognition is not in the free trial). The customer's page sits in the
   trusted device zone: a compromised page could replay a recent bank script or
   speak in its own voice.

@@ -197,7 +197,8 @@ class TrtcTts:
     model: str | None = None  # None: the API's default model
     language: str = "en"
     timeout: float = 10.0  # per request
-    deadline: float = 20.0  # for the whole script, so a slow TRTC fails before the page gives up
+    deadline: float = 20.0  # bounds the server's work on one script; the page falls back to the
+    # browser voice after 8 seconds, and audio that arrives later is still cached for "Listen again"
     http: Any = None  # an httpx.Client; tests pass one with a mock transport
 
     @property

@@ -474,11 +474,11 @@ function setupMic() {
       addMsg("system", "Voice input needs TRTC speech recognition or a browser that can transcribe. You can type instead.");
       return;
     }
+    const lit = () => session === current && listening(true); // lit once the microphone is really on
     const current = trtc
-      ? recordForTrtc(() => session === current && listening(true)) // lit once the microphone is really on
-      : listenInBrowser(() => session === current && end()); // recognition can end by itself
+      ? recordForTrtc(lit)
+      : listenInBrowser(lit, () => session === current && end()); // recognition can end by itself
     session = current;
-    if (!trtc) listening(true);
     limit = setTimeout(stop, MAX_RECORDING_MS);
   };
   mic.addEventListener("pointerdown", start);
@@ -486,10 +486,11 @@ function setupMic() {
   mic.addEventListener("pointerleave", stop);
 }
 
-function listenInBrowser(onEnd) {
+function listenInBrowser(onStart, onEnd) {
   const recognition = new Recognition();
   recognition.lang = "en-SG";
   recognition.interimResults = true;
+  recognition.onaudiostart = onStart;
   recognition.onresult = (ev) => {
     input.value = Array.from(ev.results).map((r) => r[0].transcript).join("");
   };
@@ -644,7 +645,7 @@ let speaking = null;
 const TRTC_AUDIO_WAIT_MS = 8000; // no TRTC audio by then: the browser reads the script instead
 
 // The bank voice reads a script the bank rendered. With TRTC it fetches the audio by the
-// script's SHA-256, so this page cannot make the voice say anything else; if TRTC is off,
+// script's SHA-256, so the AI that drafts cannot choose the voice's words; if TRTC is off,
 // slow or fails, the browser reads the same script. The island shows the voice while it
 // speaks; Face ID takes the island over if an approval starts meanwhile.
 function speakBankVoice(script, key) {

@@ -101,7 +101,7 @@ class Demo:
     scripts: OrderedDict[str, str] = field(default_factory=OrderedDict)
     audio: dict[str, bytes] = field(default_factory=dict)
     voice_lock: threading.Lock = field(default_factory=threading.Lock)
-    synthesising: dict[str, threading.Lock] = field(default_factory=dict)  # one TRTC call per script at a time
+    synthesising: dict[str, threading.Lock] = field(default_factory=dict)  # per script: one TRTC call at a time
 
     @property
     def pipeline(self) -> Pipeline:
@@ -195,6 +195,7 @@ def speech(o: Outcome) -> str | None:
         while len(demo.scripts) > MAX_SCRIPTS:
             old, _ = demo.scripts.popitem(last=False)
             demo.audio.pop(old, None)
+            demo.synthesising.pop(old, None)
     return key
 
 
@@ -306,9 +307,10 @@ def _cross_site(request: Request) -> JSONResponse | None:
     """Refuse a call from another site: these endpoints spend TRTC credit."""
     site = request.headers.get("sec-fetch-site")
     origin = request.headers.get("origin")
-    # Hosts, not schemes: behind an HTTPS proxy the page's scheme differs from the server's.
-    if site not in (None, "same-origin", "none") or (
-            origin is not None and urlsplit(origin).netloc != request.headers.get("host", "")):
+    # Hosts, not schemes (behind an HTTPS proxy the page's scheme differs from the server's), and the
+    # configured public origin as well as the Host header (a proxy may rewrite Host).
+    own = {request.headers.get("host", ""), urlsplit(ORIGIN).netloc}
+    if site not in (None, "same-origin", "none") or (origin is not None and urlsplit(origin).netloc not in own):
         return _refusal("CROSS_SITE", 403, "only this page may use the bank's voice")
     return None
 
@@ -324,7 +326,7 @@ def voice(script_hash: str, request: Request):
         script = demo.scripts.get(script_hash)
         audio = demo.audio.get(script_hash)
         if script is not None and audio is None:
-            busy = demo.synthesising.setdefault(script_hash, threading.Lock())
+            busy = demo.synthesising.setdefault(script_hash, threading.Lock())  # kept as long as the script
     if script is None:
         return _refusal("UNKNOWN_SCRIPT", 404, "not a script the bank rendered")
     if audio is None:
@@ -339,9 +341,6 @@ def voice(script_hash: str, request: Request):
                             demo.audio[script_hash] = audio
         except VoiceError as e:
             return _refusal(e.code, 502, e.message)
-        finally:
-            with demo.voice_lock:
-                demo.synthesising.pop(script_hash, None)
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=600"})
 
 
