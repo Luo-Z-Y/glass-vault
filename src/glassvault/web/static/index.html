@@ -86,50 +86,78 @@
       </div>
     </section>
 
-    <!-- The bank's consoles: the AI models on one side, the control plane on the other -->
+    <!-- The bank's consoles: the AI services on one side, the control plane on the other -->
     <div class="consoles">
       <div class="consoles-grid">
-        <section class="console llm" aria-label="LLM service">
-          <div class="console-head">
-            <h2>LLM service</h2>
-            <span class="console-sub">the AI behind the assistant</span>
-            <span id="llm-status" class="pill">…</span>
-          </div>
-
-          <div class="card model" id="drafter-card">
-            <div class="model-role">Drafter</div>
-            <div class="model-name" id="drafter-model">…</div>
-            <div class="model-host" id="drafter-host"></div>
-            <div class="card-sub">Turns the customer's words into a typed plan.</div>
-          </div>
-
-          <div class="card model" id="validator-card">
-            <div class="model-role">Independent validator</div>
-            <div class="model-name" id="validator-model">…</div>
-            <div class="model-host" id="validator-host"></div>
-            <div class="card-sub">Re-derives the plan blind, from the transcript alone. Any disagreement freezes it.</div>
-          </div>
-
-          <div class="card rogue-card">
-            <div class="rogue-row">
-              <div>
-                <div class="card-title">Rogue AI mode</div>
-                <div class="card-sub">Make the drafting AI malicious. The defences must still hold.</div>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="rogue-toggle" aria-label="Rogue AI mode">
-                <span class="slider"></span>
-              </label>
+        <div class="console-stack">
+          <section class="console llm" aria-label="LLM service">
+            <div class="console-head">
+              <h2>LLM service</h2>
+              <span class="console-sub">the AI behind the assistant</span>
+              <span id="llm-status" class="pill">…</span>
             </div>
-            <select id="rogue-attack" disabled aria-label="Rogue attack">
-              <option value="extra_transfer">Add a hidden S$9,000 transfer</option>
-              <option value="swap_payee">Swap the payee</option>
-              <option value="inflate_amount">Inflate an amount ×10</option>
-              <option value="swap_account">Pay from a different account</option>
-              <option value="follow_injection">Obey text injected in a bill</option>
-            </select>
-          </div>
-        </section>
+
+            <div class="card model" id="drafter-card">
+              <div class="model-role">Drafter</div>
+              <div class="model-name" id="drafter-model">…</div>
+              <div class="model-host" id="drafter-host"></div>
+              <div class="card-sub">Turns the customer's words into a typed plan.</div>
+            </div>
+
+            <div class="card model" id="validator-card">
+              <div class="model-role">Independent validator</div>
+              <div class="model-name" id="validator-model">…</div>
+              <div class="model-host" id="validator-host"></div>
+              <div class="card-sub">Re-derives the plan blind, from the transcript alone. Any disagreement freezes it.</div>
+            </div>
+
+            <div class="card rogue-card">
+              <div class="rogue-row">
+                <div>
+                  <div class="card-title">Rogue AI mode</div>
+                  <div class="card-sub">Make the drafting AI malicious. The defences must still hold.</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="rogue-toggle" aria-label="Rogue AI mode">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <select id="rogue-attack" disabled aria-label="Rogue attack">
+                <option value="extra_transfer">Add a hidden S$9,000 transfer</option>
+                <option value="swap_payee">Swap the payee</option>
+                <option value="inflate_amount">Inflate an amount ×10</option>
+                <option value="swap_account">Pay from a different account</option>
+                <option value="follow_injection">Obey text injected in a bill</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="console voice" aria-label="Voice service">
+            <div class="console-head">
+              <h2>Voice service</h2>
+              <span class="console-sub">Tencent RTC: the bank's ears and voice</span>
+              <span id="voice-status" class="pill">…</span>
+            </div>
+            <p class="voice-note" id="voice-note" hidden>Tencent RTC is not set up on this server, so the browser stands in.
+              Add the TRTC keys to <code>.env</code> (see <code>.env.example</code>) to switch.</p>
+
+            <div class="card model" id="asr-card">
+              <div class="model-role">Speech recognition</div>
+              <div class="model-name" id="asr-name">…</div>
+              <div class="model-host" id="asr-host"></div>
+              <div class="card-sub">Turns push-to-talk into the customer's words, sent as a voice turn.</div>
+              <div class="voice-activity idle" id="asr-activity">Idle</div>
+            </div>
+
+            <div class="card model" id="tts-card">
+              <div class="model-role">Bank voice</div>
+              <div class="model-name" id="tts-name">…</div>
+              <div class="model-host" id="tts-host"></div>
+              <div class="card-sub">Reads only scripts the bank rendered, fetched by their SHA-256. It takes no text from the page.</div>
+              <div class="voice-activity idle" id="tts-activity">Idle</div>
+            </div>
+          </section>
+        </div>
 
         <section class="console security" aria-label="Security">
           <div class="console-head">

@@ -14,7 +14,7 @@ approves an exact, bank-rendered confirmation with a passkey (Face ID /
 Touch ID), and a zero-trust gateway executes only what was signed. On stage we
 switch the AI to rogue mode and show it still cannot move a cent.
 
-- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): 16 attacks and the layer that stops each
+- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): 17 attacks and the layer that stops each
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): architecture, tech-stack and codebase diagrams; the request pipeline, invariants, error codes, processes and known gaps
 - [docs/CONTRACTS.md](docs/CONTRACTS.md): module interfaces
 
@@ -30,7 +30,9 @@ uv run python -i scripts/playground.py # try to rob the gateway yourself
 
 Open the web demo on `localhost` (not `127.0.0.1`) so passkeys work. Without an
 API key it runs on a rule-based offline stand-in for the LLM, so the whole flow
-works out of the box.
+works out of the box. With Tencent RTC keys in `.env` (see `.env.example`), the
+bank voice and push-to-talk run on TRTC text-to-speech and speech recognition;
+without them, the browser's own speech is used.
 
 ### With a real LLM
 
