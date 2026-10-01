@@ -189,7 +189,8 @@ class Outcome:
 class Pipeline:
     def __init__(self, gateway: GatewayPort, drafter_llm: LLM, validator_llm: LLM)
     def handle(self, dialogue: Sequence[Turn]) -> Outcome
-    # files every turn with the gateway (RequestRecord) before returning; if that fails, the
+    # files every turn with the gateway (RequestRecord) before returning; a stopped turn whose
+    # full record cannot be filed is filed abridged; if a confirm cannot be filed whole, the
     # outcome is "error" and nothing is offered for signing
 
 def agent_factory(bank, gateway, attack, *, drafter_llm=None, validator_llm=None)

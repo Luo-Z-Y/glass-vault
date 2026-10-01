@@ -268,6 +268,58 @@ def test_a_conversation_too_long_to_record_whole_is_stopped_and_recorded(pipelin
     assert len(record["transcript"]) == 100
 
 
+def test_text_that_swells_in_the_log_is_still_on_record(pipeline, audit):
+    # A control character takes six bytes in canonical JSON, so this is short in characters but not in bytes.
+    o = pipeline.handle([said("Send mum 300 for groceries " + "\x01" * 45_000)])
+    assert o.challenge is None
+    [record] = requests(audit)
+    assert record["outcome"] == o.kind and record["transcript_dropped"] == 1
+    assert audit.first_broken() is None
+
+
+def test_model_text_the_log_cannot_hold_is_filed_abridged(bank, gateway, audit):
+    from glassvault.drafter import CLARIFY_TOOL
+    from glassvault.llm import ScriptedLLM, tool_response
+
+    asks = tool_response(CLARIFY_TOOL, {"reason": "missing_info", "question": "Which account? \ud800"})
+    honest = OfflineLLM(bank.view)
+    o = Pipeline(LocalGatewayPort(gateway), ScriptedLLM([asks]), honest).handle([said("move some money")])
+    assert o.kind == "clarify"
+    [record] = requests(audit)
+    assert record["abridged"] and record["outcome"] == "clarify" and record["message"] == "Which account? ?"
+    assert record["transcript"] == [{"role": "customer", "text": "move some money", "via": "text"}]
+
+
+def test_a_confirm_with_model_text_the_log_cannot_hold_is_not_offered(bank, gateway, audit):
+    from glassvault.drafter import PLAN_TOOL
+    from glassvault.llm import ScriptedLLM, tool_response
+
+    plan = {"steps": [{"id": "t1", "type": "paynow", "from_account": "SAV", "payee_id": "P_MUM",
+                       "amount": {"value": "300"}, "evidence": {"amount": "300", "payee_id": "mum\ud800"}}]}
+    honest = OfflineLLM(bank.view)
+    o = Pipeline(LocalGatewayPort(gateway), ScriptedLLM([tool_response(PLAN_TOOL, plan)]), honest).handle(
+        [said("send mum 300")])
+    assert o.kind == "error" and o.challenge is None
+    [record] = requests(audit)
+    assert record["abridged"] and record["outcome"] == "error"
+
+
+class _RefusesConfirms(LocalGatewayPort):
+    def record_request(self, record):
+        if record.nonce is not None:
+            raise GatewayError("RECORD_MISMATCH", "simulated refusal")
+        return super().record_request(record)
+
+
+def test_a_confirm_that_cannot_be_filed_whole_becomes_an_error_on_record(bank, gateway, audit):
+    llm = OfflineLLM(bank.view)
+    o = Pipeline(_RefusesConfirms(gateway), llm, llm).handle([said("Send mum 300 for groceries")])
+    assert o.kind == "error" and o.challenge is None
+    [record] = requests(audit)
+    assert record["outcome"] == "error" and record["abridged"] and record["nonce"] is None
+    assert record["trace"][-1]["stage"] == "audit"
+
+
 def test_an_unexpected_failure_is_still_on_record(pipeline, audit, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("bug")

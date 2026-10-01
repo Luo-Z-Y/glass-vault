@@ -371,6 +371,10 @@ class Gateway:
         if now > challenge.expires_at:
             del self._pending[nonce]
             raise GatewayError("CHALLENGE_EXPIRED", "approval request expired")
+        # A challenge bound to a conversation runs only once that conversation is on file. Checked
+        # before the signature, which a passkey can use only once, so a late record lets it through.
+        if challenge.transcript_hash is not None and nonce not in self._recorded:
+            raise GatewayError("RECORD_REQUIRED", "the conversation behind this approval is not on record")
         if not self._verifier.verify(challenge.customer_id, challenge_digest(challenge), signature):
             raise GatewayError("SIGNATURE_INVALID", "signature is not from the customer's device")
         if plan is not None and _safe_plan_hash(plan) != challenge.plan_hash:
@@ -382,10 +386,6 @@ class Gateway:
                     self._consumed.add(nonce)
                     raise GatewayError("STEP_UP_LOCKED", "too many wrong token codes; this approval is void")
                 raise GatewayError("STEP_UP_REQUIRED", "enter the code from your digital token")
-        # A challenge bound to a conversation runs only once that conversation is on file. Checked
-        # last, and before the nonce is used up, so a late record can still let the approval through.
-        if challenge.transcript_hash is not None and nonce not in self._recorded:
-            raise GatewayError("RECORD_REQUIRED", "the conversation behind this approval is not on record")
 
         # The approval is genuine: it is used up now, whether or not execution succeeds.
         del self._pending[nonce]

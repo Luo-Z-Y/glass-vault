@@ -32,7 +32,7 @@ from .context import (
     payee_is_mentioned,
     scan_text,
 )
-from .crypto import transcript_hash
+from .crypto import canonical_bytes, transcript_hash
 from .drafter import DraftError, draft
 from .evaluator import EvaluationError, resolve
 from .gateway import Execution, Gateway, GatewayError
@@ -79,6 +79,10 @@ MSG_REFUSED = "I can't do this: {reasons}"
 MSG_CONFIRM = "Please check the details and confirm with Face ID."
 MSG_ERROR = "Sorry, I couldn't process that. Nothing has been sent. Could you say it another way?"
 MSG_TOO_LONG = "This conversation has got too long for me to follow safely. Nothing has been sent. Please start again."
+
+# How much transcript (canonical JSON) a record may carry, well inside the gateway's per-record cap.
+RECORD_TRANSCRIPT_BYTES = 128 * 1024
+ABRIDGED_TRANSCRIPT_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -206,7 +210,7 @@ class Pipeline:
         trace: list[TraceEvent] = []
         drafts = _Drafts()
         try:
-            if len(dialogue) > MAX_RECORD_TURNS or sum(len(t.text) for t in dialogue) > MAX_RECORD_CHARS:
+            if not _fits(dialogue, RECORD_TRANSCRIPT_BYTES):
                 # Too long to keep whole on record, so nothing from it may be signed.
                 trace.append(TraceEvent("current-request", False, f"{len(dialogue)} turns: too long to keep on record"))
                 raise _Stop("error", MSG_TOO_LONG)
@@ -227,16 +231,45 @@ class Pipeline:
             # No record, no offer: a challenge already issued is never shown, so it expires unused.
             reason = e.code if isinstance(e, GatewayError) else type(e).__name__
             failed = TraceEvent("audit", False, f"could not file the request ({reason}); nothing was offered")
-            return Outcome("error", MSG_ERROR, trace=outcome.trace + (failed,), llm_calls=outcome.llm_calls)
+            outcome = Outcome("error", MSG_ERROR, trace=outcome.trace + (failed,), llm_calls=outcome.llm_calls)
+            with contextlib.suppress(Exception):
+                self._gateway.record_request(self._abridged(dialogue, outcome))
         return outcome
 
     def _record(self, dialogue: Sequence[Turn], outcome: Outcome, drafts: _Drafts) -> None:
-        """File this turn in the gateway's audit log as a REQUEST entry (see RequestRecord)."""
+        """File this turn in the gateway's audit log as a REQUEST entry (see RequestRecord).
+
+        A confirm is filed whole or not at all. A stopped turn whose full record cannot be
+        built or filed (too big, or model text the log cannot hold) is filed abridged instead.
+        """
+        try:
+            self._gateway.record_request(self._full(dialogue, outcome, drafts))
+        except Exception:
+            if outcome.kind == "confirm":
+                raise
+            self._gateway.record_request(self._abridged(dialogue, outcome))
+
+    def _abridged(self, dialogue: Sequence[Turn], outcome: Outcome) -> RequestRecord:
+        """The outcome, the trace and the newest turns that fit, with any text the log cannot hold replaced."""
+        kept = _fitted(dialogue, ABRIDGED_TRANSCRIPT_BYTES)
+        return RequestRecord(
+            transcript=tuple(kept),
+            transcript_dropped=len(dialogue) - len(kept),
+            abridged=True,
+            outcome=outcome.kind,
+            message=_loggable(outcome.message)[:1000],
+            trace=tuple(TraceLine(stage=_loggable(t.stage)[:40], ok=t.ok, detail=_loggable(t.detail)[:500])
+                        for t in outcome.trace[:50]),
+            drafter=_loggable(self._drafter_llm.name)[:200],
+            validator=_loggable(self._validator_llm.name)[:200],
+            llm_calls=min(outcome.llm_calls, 100),
+        )
+
+    def _full(self, dialogue: Sequence[Turn], outcome: Outcome, drafts: _Drafts) -> RequestRecord:
+        """Everything about the turn; a stopped over-long request keeps its newest turns that fit."""
         diff = outcome.diff.diffs if outcome.diff else None
-        kept = list(dialogue)
-        while len(kept) > MAX_RECORD_TURNS or sum(len(t.text) for t in kept) > MAX_RECORD_CHARS:
-            kept.pop(0)  # only a stopped turn gets here: a confirm's transcript is always within the limits
-        self._gateway.record_request(RequestRecord(
+        kept = _fitted(dialogue, RECORD_TRANSCRIPT_BYTES)
+        return RequestRecord(
             transcript=tuple(kept),
             transcript_dropped=len(dialogue) - len(kept),
             outcome=outcome.kind,
@@ -254,7 +287,7 @@ class Pipeline:
             drafter=self._drafter_llm.name[:200],
             validator=self._validator_llm.name[:200],
             llm_calls=outcome.llm_calls,
-        ))
+        )
 
     def _handle(self, dialogue: Sequence[Turn], drafter: _CountingLLM, validator: _CountingLLM,
                 trace: list[TraceEvent], drafts: _Drafts) -> Outcome:
@@ -555,6 +588,26 @@ def _mentions_amount(text: str, value: Decimal) -> bool:
 _EXECUTED = re.compile(r"\bhas been executed\b|^Done\b", re.I)
 # "Both my bills", "all of my bills": every saved biller at once.
 _ALL_BILLS = re.compile(r"\b(both|all)\s+(of\s+)?(my\s+)?bills\b", re.I)
+
+
+def _fits(turns: Sequence[Turn], budget: int) -> bool:
+    """True if a record can hold these turns whole: the turn and character limits, and `budget` bytes."""
+    if len(turns) > MAX_RECORD_TURNS or sum(len(t.text) for t in turns) > MAX_RECORD_CHARS:
+        return False
+    return len(canonical_bytes([t.model_dump(mode="json") for t in turns])) <= budget
+
+
+def _fitted(turns: Sequence[Turn], budget: int) -> list[Turn]:
+    """The newest turns that fit in a record (all of them, for any request that was not stopped as too long)."""
+    kept = list(turns)
+    while kept and not _fits(kept, budget):
+        kept.pop(0)
+    return kept
+
+
+def _loggable(text: str) -> str:
+    """`text` with anything that is not valid Unicode (a lone surrogate from a model) replaced."""
+    return text.encode("utf-8", "replace").decode("utf-8")
 
 
 def _current_request(dialogue: Sequence[Turn]) -> list[Turn]:

@@ -336,8 +336,9 @@ class RequestRecord(_Frozen):
     Written for every outcome, so requests the control plane stopped (frozen,
     refused, held) are on record next to the ones that reached a challenge. It
     is the control plane's account of the turn; the gateway checks that a
-    confirm record's transcript and spoken script hash to what the signed
-    challenge carries.
+    confirm record's plan, transcript and spoken script hash to what the signed
+    challenge carries. A stopped turn whose full record cannot be filed is filed
+    `abridged`: its outcome, its trace and the newest turns that fit.
     """
 
     transcript: tuple[Turn, ...] = Field(
@@ -346,6 +347,7 @@ class RequestRecord(_Frozen):
     transcript_dropped: int = Field(
         default=0, ge=0, description="oldest turns left out to fit the limits; never on a confirm record"
     )
+    abridged: bool = Field(default=False, description="the full record could not be filed; never on a confirm record")
     outcome: OutcomeKind
     message: str = Field(max_length=4000, description="what the customer was told")
     nonce: str | None = Field(default=None, max_length=64, description="confirm only: the challenge issued")
@@ -366,8 +368,8 @@ class RequestRecord(_Frozen):
     def _consistent(self) -> RequestRecord:
         if (self.outcome == "confirm") != (self.nonce is not None):
             raise ValueError("a confirm record names its challenge's nonce, and only a confirm record does")
-        if self.nonce is not None and self.transcript_dropped:
-            raise ValueError("a confirm record holds the whole transcript its challenge was hashed over")
+        if self.nonce is not None and (self.transcript_dropped or self.abridged):
+            raise ValueError("a confirm record is whole: the transcript its challenge was hashed over, and the rest")
         if sum(len(t.text) for t in self.transcript) > MAX_RECORD_CHARS:
             raise ValueError("transcript too long")
         return self

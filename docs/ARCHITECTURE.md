@@ -229,9 +229,12 @@ audit log (step 12).
     challenge's nonce. The outcome is returned only after the record is filed;
     if filing fails, the turn becomes `error` and nothing is offered for
     signing (an issued challenge is never shown, so it expires unused). A
-    request too long to keep whole on record (over 100 turns or 50,000
-    characters) is stopped before drafting, and its record keeps the newest
-    turns that fit, with a count of the ones left out.
+    request too long to keep whole on record (over 100 turns, 50,000
+    characters or 128 KiB) is stopped before drafting, and its record keeps the
+    newest turns that fit, with a count of the ones left out. A stopped turn
+    whose full record cannot be filed (too big, or model text the log cannot
+    hold) is filed `abridged`: its outcome, its trace and the newest turns that
+    fit.
 
 What the customer reads is never free LLM text, with one exception. Outcome
 messages are fixed templates, the confirmation is rendered from templates and
@@ -273,12 +276,12 @@ verification required) to sign; until a passkey is enrolled, a key labelled
 `Gateway.execute` then runs under one lock:
 
 1. Approval checks, each with its own error code: a signature is attached, the
-   nonce is unused, the challenge exists and has not expired, the signature is
-   from the registered device, the plan hash matches (if the caller sent a
-   plan), the step-up code is right (if the challenge requires one), and a
-   challenge bound to a conversation has its record on file
-   (`RECORD_REQUIRED`; the approval is not used up, so it can go through once
-   the record is filed).
+   nonce is unused, the challenge exists and has not expired, a challenge
+   bound to a conversation has its record on file (`RECORD_REQUIRED`, checked
+   before the signature so a passkey assertion is not used up and can go
+   through once the record is filed), the signature is from the registered
+   device, the plan hash matches (if the caller sent a plan), and the step-up
+   code is right (if the challenge requires one).
 2. The nonce is consumed, whatever happens next.
 3. The gateway takes its own stored copy of the plan, re-simulates it against
    live balances and quotes, and re-runs the risk rules.
@@ -403,8 +406,9 @@ money moving before the audit write, and unaudited non-gateway errors.
   page and the web demo's attack panel ask for challenges without one, so a
   compromised agent could too (the customer still has to sign it).
 - `REQUEST` entries are the control plane's account of each turn. The gateway
-  checks their shape and, for a `confirm`, the two hashes, but cannot check
-  that the drafts, trace or outcome are true. They hold the customer's own
+  checks their shape and, for a `confirm`, that its plan, transcript and spoken
+  script hash to the signed challenge, but cannot check that the drafts, trace
+  or outcome are true. They hold the customer's own
   words, so a real deployment would apply the bank's retention and access rules
   to them. Records are capped at 256 KiB each, but `/requests` is not
   rate-limited. The web demo keeps the log in memory; the gateway service can
