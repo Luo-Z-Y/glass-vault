@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // the payment checks, while a balance or transactions enquiry is answered from bank
 // records and needs none of them.
 const STAGES = [
-  ["injection-scan", "Scam-script scan"],
+  ["injection-scan", "AI-instruction scan"],
   ["quarantine", "Untrusted text quarantined"],
   ["draft", "AI draft"],
   ["records", "Answered from bank records", "answer"],
@@ -505,6 +505,7 @@ function setupMic() {
   const listening = (on) => {
     mic.classList.toggle("listening", on);
     phone.classList.toggle("mic-on", on);
+    input.placeholder = on ? "Listening… let go to send" : INPUT_HINT;
   };
   const end = () => {
     session = null;
