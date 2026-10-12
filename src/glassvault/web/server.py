@@ -517,7 +517,7 @@ ATTACK_BUTTONS = [
     ("no_approval", "Send S$9,000 with no approval"),
     ("forge", "Sign a valid-looking plan with the AI's own key"),
     ("replay", "Replay the last approval"),
-    ("spoof", "Show 'Tan Mei Ling', pay John Lim"),
+    ("spoof", "Show 'Mum' (Tan Mei Ling), pay John Lim"),
     ("rekey", "Replace the customer's Face ID key"),
     ("sub_cent", "Slip in a fraction of a cent"),
 ]

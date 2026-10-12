@@ -14,7 +14,7 @@ screenshots are in `docs/codebuddy/`.
 
 | 2026-09-29 | WorkBuddy (Coding) | Write 20 more held-out cases (set #2) from the same kind of spec | Complete draft after ~30 min while it kept revising; taken verbatim (one YAML quoting fix) as `evals/heldout2.yaml`, run once | `…-11-workbuddy-heldout2-prompt.jpg`, `…-12-workbuddy-heldout2-drafting.jpg` |
 
-Lesson: WorkBuddy handles small, self-contained tasks well; large single-file generation tasks stalled. Complex, tightly-coupled work is done in Claude Code.
+Lesson: WorkBuddy delivered when its output was data from a spec (both held-out test sets, in 12 and about 30 minutes). Its three coding tasks stalled, the small, fully specified `parse_zh_amount` included. So it became our independent tester, and the code is written in Claude Code.
 
 ## Components owned by CodeBuddy / WorkBuddy
 

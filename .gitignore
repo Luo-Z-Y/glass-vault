@@ -10,3 +10,6 @@ docs/reference/
 # Private planning notes (competitor + judging analysis)
 docs/brainstorm.md
 !.env.example
+# Demo video: build output and your own voice recordings (see video/README.md)
+video/out/
+video/voice/

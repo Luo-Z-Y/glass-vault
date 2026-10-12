@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // the payment checks, while a balance or transactions enquiry is answered from bank
 // records and needs none of them.
 const STAGES = [
-  ["injection-scan", "Scam-script scan"],
+  ["injection-scan", "AI-instruction scan"],
   ["quarantine", "Untrusted text quarantined"],
   ["draft", "AI draft"],
   ["records", "Answered from bank records", "answer"],
@@ -148,7 +148,12 @@ function renderConfirm(o) {
 
   const approve = card.querySelector(".approve");
   const usePasskey = state?.passkey?.registered;
-  if (!usePasskey) approve.textContent = state?.passkey?.simulated_allowed ? "Approve (simulated Face ID)" : "Set up Face ID first";
+  if (!usePasskey && state?.passkey?.simulated_allowed) {
+    // Two lines, so the label never wraps mid-phrase on a narrow phone.
+    const label = el("span", "approve-label", "Approve");
+    label.appendChild(el("small", "", "simulated Face ID"));
+    approve.replaceChildren(label);
+  } else if (!usePasskey) approve.textContent = "Set up Face ID first";
   approve.disabled = !usePasskey && !state?.passkey?.simulated_allowed;
   approve.addEventListener("click", () => approveChallenge(o, card));
   const listen = card.querySelector(".listen");
@@ -216,18 +221,22 @@ function renderDiff(diff) {
 async function refreshAudit() {
   const { entries, intact } = await api("/api/audit");
   const chain = $("#chain");
-  chain.textContent = intact ? `${entries.length} entries · chain intact` : "CHAIN BROKEN";
+  const count = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+  chain.textContent = intact ? `${count} · chain intact` : "CHAIN BROKEN";
   chain.className = `pill ${intact ? "ok" : "bad"}`;
   const list = $("#audit");
   list.innerHTML = "";
   for (const e of entries.slice(-10).reverse()) {
     const li = el("li");
     li.appendChild(el("span", "kind", e.outcome ? `${e.kind} · ${e.outcome}` : e.kind));
-    li.appendChild(el("span", "at", e.at.slice(11, 19)));
+    li.appendChild(el("span", "at", new Date(e.at).toLocaleTimeString("en-GB", { hour12: false }))); // local, like the phone's clock
     li.appendChild(el("span", "hash", e.hash.slice(0, 12)));
     list.appendChild(li);
   }
 }
+
+// Display names for model ids; the card still shows the id and the host it is reached through.
+const MODEL_NAMES = { "tencent/hy3": "Tencent Hunyuan Hy3", hy3: "Tencent Hunyuan Hy3" };
 
 // The LLM service panel: which model drafts and which one re-derives, live or offline.
 function renderLLM(llm) {
@@ -236,8 +245,10 @@ function renderLLM(llm) {
   status.className = `pill ${llm.live ? "ok" : ""}`;
   for (const role of ["drafter", "validator"]) {
     const { model, host } = llm[role];
-    $(`#${role}-model`).textContent = llm.live ? model : "Offline stand-in";
-    $(`#${role}-host`).textContent = llm.live ? host || "" : "rule-based, runs without an API key";
+    const name = MODEL_NAMES[model];
+    $(`#${role}-model`).textContent = llm.live ? name || model : "Offline stand-in";
+    $(`#${role}-host`).textContent = !llm.live ? "rule-based, runs without an API key"
+      : name ? [model, host].filter(Boolean).join(" · ") : host || "";
   }
 }
 
@@ -494,6 +505,7 @@ function setupMic() {
   const listening = (on) => {
     mic.classList.toggle("listening", on);
     phone.classList.toggle("mic-on", on);
+    input.placeholder = on ? "Listening… let go to send" : INPUT_HINT;
   };
   const end = () => {
     session = null;
@@ -798,11 +810,14 @@ for (const type of ["pointerdown", "click", "change", "input"]) document.addEven
 // ---------------------------------------------------------------------------
 // Rogue mode and gateway attacks
 
-async function setRogue() {
+// `switched`: the attack changed while rogue mode stays on.
+async function setRogue(switched = false) {
   const on = $("#rogue-toggle").checked;
   const { state: s } = await api("/api/rogue", { attack: on ? $("#rogue-attack").value : null });
   renderState(s);
-  addMsg("system", on ? "Rogue AI mode is on: the drafting AI is now malicious." : "Rogue AI mode is off.");
+  const attack = $("#rogue-attack").selectedOptions[0]?.textContent;
+  addMsg("system", switched ? `Rogue AI attack switched: ${attack}.`
+    : on ? "Rogue AI mode is on: the drafting AI is now malicious." : "Rogue AI mode is off.");
 }
 
 async function loadAttacks() {
@@ -981,8 +996,8 @@ chat.addEventListener("click", (e) => {
   }
 });
 $("#passkey-btn").addEventListener("click", registerPasskey);
-$("#rogue-toggle").addEventListener("change", setRogue);
-$("#rogue-attack").addEventListener("change", () => $("#rogue-toggle").checked && setRogue());
+$("#rogue-toggle").addEventListener("change", () => setRogue());
+$("#rogue-attack").addEventListener("change", () => $("#rogue-toggle").checked && setRogue(true));
 $("#reset").addEventListener("click", async () => {
   const { state: s } = await api("/api/reset", {});
   renderState(s);
