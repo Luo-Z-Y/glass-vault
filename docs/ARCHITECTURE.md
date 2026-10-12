@@ -192,7 +192,7 @@ audit log (step 12).
    failure is `frozen`. Ambiguity is a `clarify` with options from bank
    records: a name that fits several saved payees, a spoken amount that the
    payee's history suggests was misheard (fifteen/fifty), or an amount more than
-   10× what that payee usually gets.
+   10× the largest past payment to that payee.
 6. **Resolve.** `evaluator.resolve` turns the `Plan` into a `ResolvedPlan` in
    `Decimal`, step by step against simulated balances. A fraction of an earlier
    step, or of an account's balance as it stands when that step runs ("a
