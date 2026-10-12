@@ -18,7 +18,7 @@ flowchart TB
 
     subgraph control[" "]
         direction LR
-        h_control["🧮 Control plane<br/>deterministic"] ~~~ prov["🔎 Provenance<br/>words → fields"] --> evaluator["➗ Evaluator<br/>Decimal maths"] --> validator["🕵️ Blind validator<br/>deepseek-v4-pro"] --> policy["⚖️ Risk rules<br/>KYC · limits"] --> render["📝 Confirmation<br/>templates"]
+        h_control["🧮 Control plane<br/>deterministic"] ~~~ prov["🔎 Provenance<br/>words → fields"] --> evaluator["➗ Evaluator<br/>Decimal maths"] --> validator["🕵️ Blind validator<br/>Tencent Hunyuan Hy3"] --> policy["⚖️ Risk rules<br/>KYC · limits"] --> render["📝 Confirmation<br/>templates"]
     end
 
     subgraph issue[" "]
@@ -101,7 +101,7 @@ FastAPI + Uvicorn process; the gateway can also run as its own service (see
 | Voice | Tencent RTC (TRTC): FlowTTS text-to-speech for the bank voice and sentence recognition for push-to-talk, called from the server (`voice.py`); the browser's Web Speech API and `speechSynthesis` when TRTC is not set up |
 | Help | Tencent ADP (Agent Development Platform): a published knowledge-Q&A app over `faq.md`, asked through ADP's v2 HTTP SSE chat API with httpx (`faq.py`); the FAQ itself, matched by keyword overlap, when ADP is not set up or fails |
 | Server | Python 3.12, FastAPI + Uvicorn, Pydantic v2 models, `Decimal` for every amount |
-| AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
+| AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek `deepseek-flash` drafts and Tencent Hunyuan Hy3 (through OpenRouter) validates in our runs; `.env.example` defaults to `deepseek-v4-pro` as the validator, Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
 | Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
 | Data | In-memory mock bank; the audit log is kept in memory, and the gateway service can also append it to a JSONL file |
 | Tooling | uv and hatchling, pytest (~1,300 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
@@ -193,7 +193,7 @@ audit log (step 12).
    failure is `frozen`. Ambiguity is a `clarify` with options from bank
    records: a name that fits several saved payees, a spoken amount that the
    payee's history suggests was misheard (fifteen/fifty), or an amount more than
-   10× what that payee usually gets.
+   10× the largest past payment to that payee.
 6. **Resolve.** `evaluator.resolve` turns the `Plan` into a `ResolvedPlan` in
    `Decimal`, step by step against simulated balances. A fraction of an earlier
    step, or of an account's balance as it stands when that step runs ("a

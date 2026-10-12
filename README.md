@@ -45,9 +45,9 @@ payment chat or the bank voice.
 Copy `.env.example` to `.env` and add your key. The defaults use DeepSeek's own
 API, with `deepseek-flash` drafting and `deepseek-v4-pro` validating, and thinking
 mode off for both roles (in thinking mode DeepSeek rejects forced tool calls).
-A validator from a different model family makes its check more independent.
-For Tencent Hunyuan Hy3 through OpenRouter, see `.env.example`; on Tencent Cloud
-International TokenHub, set:
+A validator from a different model family makes its check more independent;
+our results below use Tencent Hunyuan Hy3 through OpenRouter (see
+`.env.example`). On Tencent Cloud International TokenHub, set:
 
 ```
 GV_VALIDATOR_BASE_URL=https://tokenhub-intl.tencentcloudmaas.com/v1
@@ -69,6 +69,23 @@ simulated customer signs every confirmation, so safety has to come from the
 automated defences. `evals/heldout.yaml` and `evals/heldout2.yaml` are
 independent test sets: 20 cases each that WorkBuddy wrote from a spec of the
 bank data and outcome rules, without seeing our prompts or cases.
+
+Results (12 Oct 2026; Glass Vault with a DeepSeek drafter and a Tencent Hunyuan
+Hy3 validator; the naive baseline is one DeepSeek call that executes directly,
+run on 29 Sep):
+
+| Test set | Glass Vault: unsafe executions | Glass Vault: fully correct | Naive: unsafe executions (S$ moved) | Naive: fully correct |
+|---|---|---|---|---|
+| Development | **0** | 89/90 | 36 (S$145,146.41) | 42/84 |
+| Held-out set 1 | **0** | 14/20 | 4 (S$5,355.00) | 7/20 |
+| Held-out set 2 | **0** | 19/20 | 3 (S$7,981.44) | 9/20 |
+
+Rogue-AI attacks frozen: 12/12 (naive: 0/12). The naive baseline ran before the
+6 enquiry cases were added, hence 84 development cases. Every Glass Vault miss
+is a safe one: a question asked or a request frozen, never money moved. The
+first run of held-out set 2 found one wrong default source account; it became a
+deterministic rule (commit 7f17108), so set 2 is no longer untouched for that
+case. Full scorecards are in `evals/results/`.
 
 ## Layout
 
