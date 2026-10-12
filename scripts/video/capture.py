@@ -17,19 +17,26 @@ Steps (each a JSON object in the scene's "steps"):
   {"wait_say": n}                 wait for line n to end
   {"at": [n, f]}                  wait until fraction f of line n has been spoken
   {"pause": s}
-  {"type": text, "over": n}       type into #input (or "into"), spread over 80% of line n, or at "cps"
-  {"click": sel, "after": s}      move the cursor there and click; "voice": s also waits for the
-                                  bank voice this starts and stops it at its first pause after s
+  {"type": text, "over": n}       type into #input (or "into"), done by 80% of line n (which has
+                                  started), or at "cps" characters a second
+  {"click": sel, "after": s}      move the cursor there and click, then park it out of the way
+                                  ("park": false leaves it); "voice" also waits for the bank voice
+                                  this starts, as wait_voice does ("voice": true: to the end)
   {"select": sel, "value": v}
   {"wait_for": sel, "timeout": s}
-  {"highlight": sel, "seconds": s, "block": true}   a red box; "block" waits it out
-  {"zoom": sel, "seconds": s}     the final cut shows that part of the screen enlarged
+  {"highlight": sel, "seconds": s, "block": true, "light": true}
+                                  a red box ("light": a white one, for the red header); "block"
+                                  waits it out
+  {"zoom": sel, "seconds": s}     the final cut shows that element enlarged (at most 2.2×), with
+                                  "pad" CSS pixels around it (default 32)
   {"scroll": sel}                 scroll it to the middle of the window
   {"wait_voice": s}               wait for the bank voice (a reply to a voice turn reads itself);
-                                  with s, stop it at its first pause after s seconds
+                                  with s, stop it at its first pause after s seconds; with
+                                  {"sentences": k}, stop it after its first k sentences
   {"hold_mic": name}              push to talk, saying voice_requests[name]
 Scene keys: "setup" (API turns before recording; "approve": true signs a
-confirmation), "prescroll" (scroll before recording starts), "only_if": "adp".
+confirmation), "keep_state" (no reset: carry on from the scene before),
+"prescroll" (scroll before recording starts), "only_if": "adp".
 
 Per scene, video/out/clips/<scene>/ gets clip.mp4 (silent, 30 fps),
 events.json (when each narration line, sound and zoom starts, and the line
@@ -62,14 +69,18 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import re
 import wave
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Page, async_playwright
 
-from vidlib import (CLIPS, FPS, GAP, HEIGHT, NARRATION, OUT, ROOT, WIDTH, ffmpeg, line_key, load_manifest,
-                    load_scenes, run)
+from glassvault.voice import voice_from_env
+
+from vidlib import (CLIPS, FPS, GAP, HEIGHT, NARRATION, OUT, ROOT, WIDTH, ffmpeg, fingerprint, line_key,
+                    load_manifest, load_scenes, run)
 
 VIEWPORT = {"width": 1600, "height": 900}
 SCALE = 1.2
@@ -96,7 +107,15 @@ OVERLAY = """
     }
     const wait = Math.min(window.__gvQuietUntil - now(), %(max_delay)s);
     if (wait <= 0) return play.call(this);
-    return new Promise((ok, fail) => setTimeout(() => play.call(this).then(ok, fail), wait * 1000));
+    return new Promise((ok, fail) => {
+      this.__gvHold = setTimeout(() => { this.__gvHold = null; play.call(this).then(ok, fail); }, wait * 1000);
+      this.__gvCancel = () => fail(new DOMException("stopped while held", "AbortError"));
+    });
+  };
+  const pause = HTMLMediaElement.prototype.pause;
+  HTMLMediaElement.prototype.pause = function () {
+    if (this.__gvHold) { clearTimeout(this.__gvHold); this.__gvHold = null; this.__gvCancel(); }
+    return pause.call(this);
   };
   const osc = AudioContext.prototype.createOscillator;
   let lastChime = 0;
@@ -124,7 +143,8 @@ OVERLAY = """
                   border: 3px solid #ff3333; z-index: 2147483646; pointer-events: none; animation: __rip .6s ease-out forwards; }
       @keyframes __rip { from { transform: scale(.3); opacity: 1 } to { transform: scale(1.4); opacity: 0 } }
       .__hl { position: fixed; z-index: 2147483645; pointer-events: none; border: 4px solid #ff3333; border-radius: 16px;
-              box-shadow: 0 0 0 6px rgba(255,51,51,.18); opacity: 0; transition: opacity .3s; }`;
+              box-shadow: 0 0 0 6px rgba(255,51,51,.18); opacity: 0; transition: opacity .3s; }
+      .__hl.light { border-color: #fff; box-shadow: 0 0 0 3px rgba(0,0,0,.55); }`;
     document.head.appendChild(style);
     const cur = document.createElement("div");
     cur.id = "__cursor";
@@ -141,9 +161,9 @@ OVERLAY = """
     if (mic) new MutationObserver(() => log(mic.classList.contains("listening") ? "mic-on" : "mic-off"))
       .observe(mic, { attributes: true, attributeFilter: ["class"] });
   });
-  window.__gvHighlight = (target, seconds) => {
+  window.__gvHighlight = (target, seconds, light) => {
     const box = document.createElement("div");
-    box.className = "__hl";
+    box.className = light ? "__hl light" : "__hl";
     document.body.appendChild(box);
     const place = () => {
       if (!box.isConnected) return;
@@ -205,6 +225,17 @@ def pauses(wav: Path) -> list[float]:
     return [float(line.split("silence_start: ")[1]) for line in found.splitlines() if "silence_start: " in line]
 
 
+def sentence_end(script: str, k: int, wav: Path) -> float:
+    """When the bank voice in `wav` finishes the first `k` sentences of `script`: the length of
+    those sentences spoken alone by the same TRTC voice, snapped to the nearest pause in `wav`."""
+    prefix = " ".join(re.split(r"(?<=[.!?])\s+", script)[:k])
+    tts, _ = voice_from_env()
+    with wave.open(BytesIO(tts.synthesize(prefix))) as w:
+        alone = w.getnframes() / w.getframerate()
+    near = [p for p in pauses(wav) if abs(p - alone) < 1.0]
+    return min(near, key=lambda p: abs(p - alone)) if near else alone
+
+
 def mic_file(out: Path, name: str) -> Path:
     """The customer's request as the microphone hears it: half a second of silence before and after,
     at the narration's rate (24 kHz mono; the page resamples it)."""
@@ -234,6 +265,7 @@ class Scene:
         self.voices: dict[str, Path] = {}  # script hash -> the bank voice's WAV
         self.scripts: dict[str, str] = {}  # script hash -> the script it speaks
         self.last_voice_turn = 0.0  # when the customer last let go of the microphone
+        self.sentences: dict[str, int] = {}  # script hash -> sentences played, when stopped by sentence
         self.frames = out / "frames"
 
     # --- screencast -------------------------------------------------------------------------
@@ -323,36 +355,36 @@ class Scene:
         await self.page.mouse.up()
         return x, y
 
-    async def type(self, text: str, into: str, per_char: float) -> None:
+    async def type(self, text: str, into: str, end: float | None, cps: float) -> None:
+        """Type `text`, finishing by `end` (epoch seconds) if given, else at `cps` characters a second."""
         x, y = await self.click(into)
         await self.page.mouse.move(x - 60, y + 70, steps=8)  # off the text being typed
-        for ch in text:
+        begin = time.time()
+        end = end if end and end > begin + 0.5 else begin + len(text) / cps
+        for i, ch in enumerate(text):
             await self.page.keyboard.type(ch)
-            await asyncio.sleep(per_char)
+            await self.until(begin + (i + 1) * (end - begin) / len(text))
 
-    async def highlight(self, selector: str, seconds: float, block: bool) -> None:
+    async def highlight(self, selector: str, seconds: float, block: bool, light: bool = False) -> None:
         target = self.page.locator(selector).first
         if await target.count() == 0:
             print(f"    (nothing to highlight: {selector})")
             return
-        await target.evaluate("(el, s) => window.__gvHighlight(el, s)", seconds)
+        await target.evaluate("(el, [s, light]) => window.__gvHighlight(el, s, light)", [seconds, light])
         await asyncio.sleep(seconds if block else min(seconds, 1.2))
 
-    async def zoom(self, selector: str, seconds: float) -> None:
-        """Mark a stretch of the clip to be shown enlarged: the element, padded to 16:9."""
+    async def zoom(self, selector: str, seconds: float, pad: float = 32) -> None:
+        """Mark a stretch of the clip to be shown enlarged: the element with a margin, in frame pixels."""
+        await self.page.mouse.move(*PARK, steps=8)  # the cursor would be enlarged too
         box = await self.page.locator(selector).first.bounding_box()
         if not box:
             print(f"    (nothing to zoom into: {selector})")
             return
-        pad = 24
-        bw, bh = (box["width"] + 2 * pad) * SCALE, (box["height"] + 2 * pad) * SCALE
-        cx, cy = (box["x"] - pad) * SCALE + bw / 2, (box["y"] - pad) * SCALE + bh / 2
-        w = min(max(bw, bh * 16 / 9, WIDTH / 2.2), WIDTH)  # 16:9, enlarged at most 2.2×
-        h = w * 9 / 16
-        left = min(max(cx - w / 2, 0), WIDTH - w)
-        top = min(max(cy - h / 2, 0), HEIGHT - h)
+        left, top = max((box["x"] - pad) * SCALE, 0), max((box["y"] - pad) * SCALE, 0)
+        right = min((box["x"] + box["width"] + pad) * SCALE, WIDTH)
+        bottom = min((box["y"] + box["height"] + pad) * SCALE, HEIGHT)
         self.zooms.append({"start": round(time.time() - self.t0, 3), "seconds": seconds,
-                           "x": round(left), "y": round(top), "w": round(w), "h": round(h)})
+                           "x": round(left), "y": round(top), "w": round(right - left), "h": round(bottom - top)})
 
     async def log(self) -> list[dict[str, Any]]:
         return await self.page.evaluate("window.__gv")
@@ -381,7 +413,13 @@ class Scene:
                 if key in self.voices:
                     break
                 await asyncio.sleep(0.1)
-            stop = next((p for p in pauses(self.voices[key]) if p >= play_for), play_for) if key in self.voices else play_for
+            if key not in self.voices:
+                raise RuntimeError("the bank voice's audio was not captured")
+            if isinstance(play_for, dict):
+                stop = await asyncio.to_thread(sentence_end, self.scripts.get(key, ""), play_for["sentences"], self.voices[key])
+                self.sentences[key] = play_for["sentences"]
+            else:
+                stop = next((p for p in pauses(self.voices[key]) if p >= play_for), play_for)
             await self.until(playing["t"] + stop + 0.1)
             await self.page.evaluate("stopSpeaking()")
         self.free = max(self.free, time.time() + 0.3)
@@ -399,7 +437,7 @@ class Scene:
         await asyncio.sleep(seconds + 0.3)
         await self.page.mouse.up()
         self.audio.append({"kind": "customer", "file": f"mic-{name}.wav", "start": round(on["t"] - self.t0, 3),
-                           "text": self.manifest[name]["text"]})
+                           "seconds": round(seconds, 3), "text": self.manifest[name]["text"]})
         self.free = max(self.free, time.time())
         self.last_voice_turn = time.time()
         await self.page.mouse.move(*PARK, steps=12)
@@ -416,14 +454,16 @@ class Scene:
         elif "pause" in step:
             await asyncio.sleep(step["pause"])
         elif "type" in step:
-            text = step["type"]
-            per_char = self.seconds(step["over"]) * 0.8 / len(text) if "over" in step else 1 / step.get("cps", 16)
-            await self.type(text, step.get("into", "#input"), per_char)
+            n = step.get("over")
+            end = self.starts[n] + self.seconds(n) * 0.8 if n else None
+            await self.type(step["type"], step.get("into", "#input"), end, step.get("cps", 16))
         elif "click" in step:
             clicked = time.time()
             await self.click(step["click"])
+            if step.get("park", True):
+                await page.mouse.move(*PARK, steps=12)
             if "voice" in step:
-                await self.bank_voice(clicked, step["voice"])
+                await self.bank_voice(clicked, None if step["voice"] is True else step["voice"])
             await asyncio.sleep(step.get("after", 0.3))
         elif "select" in step:
             await self.point(step["select"])
@@ -433,9 +473,9 @@ class Scene:
             await page.locator(step["wait_for"]).first.wait_for(state="visible", timeout=step.get("timeout", 30) * 1000)
             await asyncio.sleep(0.3)
         elif "highlight" in step:
-            await self.highlight(step["highlight"], step.get("seconds", 3), step.get("block", False))
+            await self.highlight(step["highlight"], step.get("seconds", 3), step.get("block", False), step.get("light", False))
         elif "zoom" in step:
-            await self.zoom(step["zoom"], step.get("seconds", 4))
+            await self.zoom(step["zoom"], step.get("seconds", 4), step.get("pad", 32))
         elif "scroll" in step:
             await page.locator(step["scroll"]).first.evaluate("el => el.scrollIntoView({behavior: 'smooth', block: 'center'})")
             await page.mouse.move(*PARK, steps=8)
@@ -467,8 +507,10 @@ class Scene:
                     full = w.getnframes() / w.getframerate()
                 self.audio.append({"kind": "bank", "file": self.voices[key].name, "start": round(e["t"] - self.t0, 3),
                                    "seconds": round(min(end - e["t"], full), 3), "full_seconds": round(full, 3),
-                                   "script": self.scripts.get(key, "")})
-        return {"scene": self.spec["id"], "duration": round(duration, 3), "lines": self.lines,
+                                   "script": self.scripts.get(key, ""), **({"sentences": self.sentences[key]}
+                                                                        if key in self.sentences else {})})
+        return {"scene": self.spec["id"], "fingerprint": fingerprint(self.spec, self.manifest),
+                "duration": round(duration, 3), "lines": self.lines,
                 "audio": sorted(self.audio, key=lambda a: a["start"]), "zooms": self.zooms}
 
 
@@ -479,7 +521,8 @@ async def record(browser_type, base: str, spec: dict[str, Any], manifest: dict[s
     tmp.mkdir(parents=True)
     mics = [mic_file(tmp, step["hold_mic"]) for step in spec["steps"] if "hold_mic" in step]
 
-    api(base, "/api/reset", {})
+    if not spec.get("keep_state"):
+        api(base, "/api/reset", {})
     for s in spec.get("setup", []):
         outcome = api(base, "/api/message", {"text": s["message"]})["outcome"]
         if s.get("approve"):
@@ -555,7 +598,6 @@ async def main() -> None:
                     continue
                 if spec.get("only_if") == "adp" and not (adp or args.include_help):
                     print(f"  {spec['id']}: skipped (Help is not on Tencent ADP; see scripts/adp_setup.py)")
-                    shutil.rmtree(CLIPS / spec["id"], ignore_errors=True)
                     continue
                 await record(p.chromium, base, spec, manifest)
     finally:

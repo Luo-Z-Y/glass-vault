@@ -10,6 +10,7 @@ data-step <= n). Uses the installed Google Chrome, headless and muted.
 from __future__ import annotations
 
 import asyncio
+import shutil
 
 from playwright.async_api import async_playwright
 
@@ -17,9 +18,11 @@ from vidlib import HEIGHT, SLIDES, VIDEO, WIDTH, load_scenes
 
 
 async def main() -> None:
-    SLIDES.mkdir(parents=True, exist_ok=True)
-    for old in SLIDES.glob("*.png"):  # a slide or step that no longer exists must not linger
-        old.unlink()
+    # Rendered beside the old set and swapped in when complete, so a failed run leaves the old
+    # slides, and a slide or step that no longer exists does not linger.
+    fresh = SLIDES.with_name("slides.partial")
+    shutil.rmtree(fresh, ignore_errors=True)
+    fresh.mkdir(parents=True)
     url = (VIDEO / "slides.html").as_uri()
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome", args=["--mute-audio"])
@@ -31,8 +34,10 @@ async def main() -> None:
             for step in range(1, len(scene["narration"]) + 1):
                 await page.evaluate(f"location.hash = '{scene['slide']}/{step}'")
                 await page.wait_for_timeout(150)
-                await page.screenshot(path=SLIDES / f"{scene['slide']}-{step}.png")
+                await page.screenshot(path=fresh / f"{scene['slide']}-{step}.png")
         await browser.close()
+    shutil.rmtree(SLIDES, ignore_errors=True)
+    fresh.rename(SLIDES)
     print(f"slides in {SLIDES.relative_to(VIDEO.parent)}")
 
 

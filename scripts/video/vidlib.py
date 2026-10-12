@@ -9,6 +9,7 @@ to record (video/voice/design-03.wav).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -36,6 +37,14 @@ def load_scenes() -> list[dict[str, Any]]:
 
 def line_key(scene_id: str, index: int) -> str:
     return f"{scene_id}-{index + 1:02d}"
+
+
+def fingerprint(spec: dict[str, Any], manifest: dict[str, Any]) -> str:
+    """What a demo take depends on besides its narration: its steps and setup, and how long the
+    customer's spoken requests are. capture.py stores it; assemble.py recomputes it to tell a stale take."""
+    said = {step["hold_mic"]: manifest[step["hold_mic"]]["seconds"] for step in spec["steps"] if "hold_mic" in step}
+    keys = ("steps", "setup", "prescroll", "keep_state")
+    return hashlib.sha256(json.dumps([{k: spec.get(k) for k in keys}, said], sort_keys=True).encode()).hexdigest()[:16]
 
 
 def wav_seconds(path: Path) -> float:
@@ -66,6 +75,7 @@ def run(*args: str | Path) -> None:
         raise SystemExit(f"{Path(str(args[0])).name} failed:\n{e.stderr.strip()}") from None
 
 
-def to_wav(src: Path, dst: Path) -> None:
-    """Any audio file ffmpeg can read, as 24 kHz mono 16-bit WAV."""
-    run(ffmpeg(), "-y", "-loglevel", "error", "-i", src, "-ac", "1", "-ar", str(RATE), "-sample_fmt", "s16", dst)
+def to_wav(src: Path, dst: Path, filters: str | None = None) -> None:
+    """Any audio file ffmpeg can read, as 24 kHz mono 16-bit WAV, through `filters` if given."""
+    af = ["-af", filters] if filters else []
+    run(ffmpeg(), "-y", "-loglevel", "error", "-i", src, *af, "-ac", "1", "-ar", str(RATE), "-sample_fmt", "s16", dst)

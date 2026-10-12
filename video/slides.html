@@ -62,6 +62,7 @@
   .close .stack { margin-top: 48px; display: flex; flex-wrap: wrap; gap: 12px; }
   .close .stack span { padding: 12px 18px; border-radius: 14px; background: #fff; border: 2px solid var(--line); font-size: 22px; color: var(--muted); }
   .close .stack b { color: var(--ink); margin-right: 6px; }
+  .close .stack .other { background: transparent; border-style: dashed; }
   .close .simulated { margin-top: 16px; font-size: 22px; color: var(--muted); }
   .close .thanks { margin-top: auto; font-size: 64px; font-weight: 800; letter-spacing: -0.02em; }
   .close .repo { margin-top: 16px; font-size: 30px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -78,7 +79,7 @@
   .stat .big small { font-size: 44px; font-weight: 700; }
   .stat p { margin-top: 14px; font-size: 27px; line-height: 1.3; color: #d6d6d6; }
   .stat p b { color: #fff; }
-  .risks { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .risks { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 18px; }
   .risk { background: var(--bad-soft); border: 2px solid var(--bad-line); border-radius: 22px; padding: 22px 26px; font-size: 28px; font-weight: 650; color: #7a1a12; }
   .warning { margin-top: 24px; grid-column: 1 / -1; background: #fff; border: 2px solid var(--line); border-left: 10px solid var(--red);
              border-radius: 18px; padding: 22px 28px; font-size: 30px; font-weight: 650; }
@@ -96,7 +97,6 @@
   .box.plane ul { margin-top: 14px; list-style: none; display: flex; flex-direction: column; gap: 12px; }
   .box.plane li { font-size: 23px; line-height: 1.3; padding: 12px 16px; border-radius: 14px; background: #f5f5f5; font-weight: 600; }
   .box.plane li.hy { background: var(--amber-soft); }
-  .box.plane li[data-step]:not(.shown) { display: none; }
   .box.plane li span { display: block; font-size: 19px; font-weight: 500; color: var(--muted); margin-top: 2px; }
   .box.device { border-color: var(--red); }
   .box.gate { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -133,7 +133,7 @@
   .point.tip { border-left: 10px solid var(--red); }
   .shot { align-self: center; width: 560px; border-radius: 34px; overflow: hidden; border: 2px solid var(--line);
           box-shadow: 0 30px 70px rgba(0,0,0,0.16); background: #fff; }
-  .shot img { display: block; width: 100%; height: 470px; object-fit: cover; object-position: 50% 48%; }
+  .shot img { display: block; width: 100%; height: 470px; object-fit: cover; object-position: 50% 43%; }
   .shot figcaption { padding: 14px 20px; font-size: 19px; color: var(--muted); border-top: 2px solid var(--line); }
 </style>
 </head>
@@ -145,7 +145,7 @@
     <h1>Glass Vault</h1>
     <p class="track">Direct Conversational Transaction Agent<br>Scenario 1: voice-enabled payments</p>
     <p class="say">Pay, transfer and invest, just by saying it.</p>
-    <p class="promise" data-step="2">The AI drafts.<br><em>Only your face moves money.</em></p>
+    <p class="promise">The AI drafts.<br><em>Only your face moves money.</em></p>
   </div>
   <div class="right">
     <div class="phone"><div class="screen">
@@ -162,8 +162,8 @@
             Approve with Face ID
           </div>
         </div>
-        <div class="bubble" data-step="2">Send mum 300 for groceries</div>
-        <div class="pcard frozen" data-step="2">
+        <div class="bubble">Send mum 300 for groceries</div>
+        <div class="pcard frozen">
           <h3>Rogue AI draft · frozen</h3>
           <p>A hidden S$9,000 transfer. Nothing to sign, nothing sent.</p>
         </div>
@@ -219,10 +219,10 @@
       <div class="zone">Bank control plane</div>
       <h3>Bank checks</h3>
       <ul>
-        <li>Every amount, payee and destination traced to your words</li>
+        <li>Every amount, payee and destination traced to your words or bank records</li>
         <li>Every dollar computed in code<span>“half of it” = S$500.00, exactly</span></li>
-        <li class="hy" data-step="3">Second AI reads your words blind<span>Tencent Hunyuan Hy3 · disagree → freeze</span></li>
         <li>Risk and KYC rules<span>limits, new payees, velocity, step-up</span></li>
+        <li class="hy" data-step="3">Second AI reads your words blind<span>Tencent Hunyuan Hy3 · disagree → freeze</span></li>
       </ul>
     </div>
     <div class="arrow" data-step="4">→</div>
@@ -232,8 +232,8 @@
       <p>Rendered from bank records, read by the bank voice. You sign it with Face ID.</p>
       <div class="tag">Passkey signature</div>
     </div>
-    <div class="arrow" data-step="5">→</div>
-    <div class="box gate" data-step="5">
+    <div class="arrow" data-step="4">→</div>
+    <div class="box gate" data-step="4">
       <div class="zone">Gateway</div>
       <h3>Executes what you signed</h3>
       <p>The only code that can move money. Exactly the signed plan, once.</p>
@@ -251,18 +251,18 @@
     <div class="score good" data-step="2">
       <div class="who">Glass Vault</div>
       <div class="num">0</div>
-      <div class="what">unsafe payments in 130 cases</div>
+      <div class="what">unsafe transactions in 130 cases</div>
       <div class="more"><b>122 of 130</b> fully correct. Every miss was safe: a question asked or a request frozen. 12 of 12 rogue-AI attacks frozen.</div>
     </div>
     <div class="score bad" data-step="3">
       <div class="who">Naive single-AI agent</div>
       <div class="num">43</div>
-      <div class="what">unsafe payments · S$158,482.85 that should not have moved</div>
-      <div class="more"><b>58 of 124</b> fully correct. One model call that executes directly, on the same payment cases (it ran before 6 read-only enquiry cases were added).</div>
+      <div class="what">unsafe transactions · S$158,482.85 that should not have moved</div>
+      <div class="more">Fewer than half fully correct (<b>58 of 124</b>, scored 29 Sep). One model call that executes directly, on the same payment cases.</div>
     </div>
   </div>
-  <div class="wb" data-step="4"><b>40</b> of the cases are held out, written by <b>WorkBuddy</b> as an independent tester, blind to our prompts.</div>
-  <div class="source" data-step="2">Current runs (12 Oct): Tencent Hunyuan Hy3 validator. First untuned held-out runs (29 Sep, DeepSeek validator): 0 and 1 unsafe; that gap became a deterministic rule. Scorecards in evals/results/.</div>
+  <div class="wb" data-step="4"><b>40</b> held-out cases by <b>WorkBuddy</b>, blind to our prompts. Their first, untuned run caught <b>1</b> unsafe transaction (a S$481.44 share buy from the wrong account); it became a fixed rule, and the 0 is after that fix.</div>
+  <div class="source" data-step="2">Current runs (12 Oct) with the Tencent Hunyuan Hy3 validator; the first held-out runs (29 Sep) used a DeepSeek validator. Scorecards in evals/results/.</div>
 </section>
 
 <section class="slide build" id="build">
@@ -270,10 +270,9 @@
     <div class="kicker">How we built it</div>
     <h2>WorkBuddy as our <em>independent tester.</em></h2>
     <div class="points">
-      <div class="point" data-step="2"><h3>Blind held-out tests</h3><p>Given only the bank's test data and the outcome rules, it wrote 40 test cases, blind to our prompts.</p></div>
-      <div class="point" data-step="3"><h3>It caught a real bug</h3><p>Each set was run once, untuned. Set 2 found a share buy from the wrong default account; that became a deterministic rule.</p></div>
-      <div class="point tip" data-step="4"><h3>Tip: one well-specified job</h3><p>Test cases from a spec, with a clear output format: back within half an hour. Open-ended coding tasks stalled.</p></div>
-      <div class="point tip" data-step="5"><h3>Tip: a second AI as your tester, not just your coder</h3><p>The app itself: written with Claude Code, every change reviewed, over 1,300 automated tests.</p></div>
+      <div class="point"><h3>Our independent QA tester</h3><p>Given only the bank's test data and the outcome rules, it wrote 40 held-out test cases, blind to our prompts.</p></div>
+      <div class="point tip" data-step="2"><h3>Tip: one well-specified job outside the code</h3><p>Test cases from a spec: back within half an hour. Three coding tasks stalled, even one small, fully specified function.</p></div>
+      <div class="point tip" data-step="3"><h3>Tip: a second AI as your tester, not just your coder</h3><p>The app itself: written with Claude Code, over 1,300 automated tests.</p></div>
     </div>
   </div>
   <figure class="shot" data-step="1">
@@ -288,11 +287,12 @@
     <h1>Glass Vault</h1>
     <p class="promise">The AI drafts.<br><em>Only your face moves money.</em></p>
     <div class="stack">
-      <span><b>Tencent Hunyuan</b> independent validator</span>
+      <span><b>Tencent Hunyuan Hy3</b> independent validator</span>
       <span><b>Tencent RTC</b> speech recognition, bank voice</span>
       <span><b>Tencent ADP</b> Help</span>
+      <span class="other"><b>DeepSeek</b> drafter</span>
     </div>
-    <p class="simulated">The bank, PayNow and share prices are simulated.</p>
+    <p class="simulated">Simulated: the bank, PayNow, share prices, and Face ID in this recording.</p>
     <p class="thanks" data-step="2">Thank you.</p>
     <p class="repo">github.com/Luo-Z-Y/glass-vault</p>
   </div>

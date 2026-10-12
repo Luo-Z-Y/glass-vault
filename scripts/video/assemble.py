@@ -6,7 +6,10 @@ Reads video/scenes.json, the narration (narrate.py), the slide images
 (slides.py) and the recorded demos (capture.py). A slide scene lasts as long as
 its narration and shows step n during line n; a demo scene keeps the timing it
 was recorded with, and stops with an error if its narration has changed since
-(record it again with capture.py). Writes to video/out/:
+(record it again with capture.py). A montage scene is a fast cut from demos:
+each piece runs from [line, offset] to [line, offset] of a demo scene (seconds
+from that line's start), at its "speed", marked as sped up. Writes to
+video/out/:
 
   glass-vault-demo.mp4               narrated, with English subtitles as a track
   glass-vault-demo-no-narration.mp4  the same picture with only the app's own
@@ -33,8 +36,8 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from vidlib import (CLIPS, FPS, GAP, HEIGHT, NARRATION, OUT, RATE, SLIDES, WIDTH, ffmpeg, line_key, load_manifest,
-                    load_scenes, run)
+from vidlib import (CLIPS, FPS, GAP, HEIGHT, NARRATION, OUT, RATE, SLIDES, WIDTH, ffmpeg, fingerprint, line_key,
+                    load_manifest, load_scenes, run)
 
 LEAD = 0.5  # seconds before a slide's first line
 TAIL = 0.7  # seconds after a slide's last line, unless the scene sets "tail"
@@ -43,7 +46,11 @@ END_FADE = 1.2  # fade to black at the very end
 GREY = "0xF5F5F7"
 LOUDNESS = -16.0  # LUFS, for the narrated mix
 LEVELS = {"narration": 1.0, "bank": 0.9, "customer": 0.9, "chime": 0.25}
-X264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS)]
+# Every segment in limited ("tv") range: the demo clips come from JPEG frames in full range, and
+# segments joined without re-encoding must agree, or the slides play back washed out.
+X264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-color_range", "tv",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-r", str(FPS)]
+FONT = Path("/System/Library/Fonts/SFNS.ttf")  # for the speed badge; left out where the font is missing
 
 
 def chime(path: Path) -> None:
@@ -64,9 +71,10 @@ def chime(path: Path) -> None:
 
 
 def fades(duration: float, last: bool) -> str:
+    """Dip to grey at both ends (to black at the very end), in RGB so every scene dips to the same grey."""
     out = f"fade=out:st={duration - END_FADE:.3f}:d={END_FADE}" if last else \
         f"fade=out:st={duration - FADE:.3f}:d={FADE}:color={GREY}"
-    return f"fade=in:st=0:d={FADE}:color={GREY},{out}"
+    return f"format=gbrp,fade=in:st=0:d={FADE}:color={GREY},{out},scale=out_range=tv:out_color_matrix=bt709,format=yuv420p"
 
 
 def slide_scene(scene: dict[str, Any], manifest: dict[str, Any], seg: Path, last: bool) -> dict[str, Any]:
@@ -85,31 +93,60 @@ def slide_scene(scene: dict[str, Any], manifest: dict[str, Any], seg: Path, last
                 f.write(f"file '{SLIDES / f'{scene['slide']}-{step}.png'}'\nduration {b - a:.3f}\n")
             f.write(f"file '{SLIDES / f'{scene['slide']}-{len(lines)}.png'}'\n")
         run(ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listing,
-            "-vf", f"scale={WIDTH}:{HEIGHT},fps={FPS},{fades(duration, last)},format=yuv420p", *X264,
+            "-vf", f"scale={WIDTH}:{HEIGHT},fps={FPS},{fades(duration, last)}", *X264,
             "-t", f"{duration:.3f}", seg)
     finally:
         listing.unlink(missing_ok=True)
     return {"duration": duration, "lines": lines, "audio": []}
 
 
-def check_take(scene: dict[str, Any], events: dict[str, Any], manifest: dict[str, Any]) -> None:
-    """Stop if a demo was recorded with other narration than it has now, or a line would overlap."""
-    again = f"record it again: capture.py {scene['id']}, then make.py --no-capture"
+def stale_take(scene: dict[str, Any], events: dict[str, Any], manifest: dict[str, Any]) -> str | None:
+    """Why a demo take no longer matches its scene (narration, steps or spoken requests), or None."""
     expected = [line_key(scene["id"], i) for i in range(len(scene["narration"]))]
     if [line["key"] for line in events["lines"]] != expected:
-        raise SystemExit(f"{scene['id']} was recorded with other narration lines; {again}")
+        return "its narration lines changed"
     for line in events["lines"]:
         now = manifest[line["key"]]
         if line.get("text") != now["text"] or abs(line.get("seconds", -1) - now["seconds"]) > 0.05:
-            raise SystemExit(f"{line['key']} has changed since {scene['id']} was recorded; {again}")
+            return f"{line['key']} changed"
+    if events.get("fingerprint", fingerprint(scene, manifest)) != fingerprint(scene, manifest):
+        return "its steps, setup or spoken requests changed"
+    return None
+
+
+def check_overlaps(scene: dict[str, Any], events: dict[str, Any]) -> None:
+    """Warn where narration, the customer or the bank voice would talk over each other."""
     spans = [(line["start"], line["start"] + line["seconds"], line["key"]) for line in events["lines"]]
     spans += [(a["start"], a["start"] + a.get("seconds", 0.5), a["kind"]) for a in events["audio"] if a["kind"] != "chime"]
     spans.sort()
-    for (a0, a1, a), (b0, _, b) in zip(spans, spans[1:]):
-        if a1 - b0 > 0.05:
-            print(f"  warning: in {scene['id']}, {a} runs {a1 - b0:.1f} s into {b}")
-    if spans and spans[-1][1] > events["duration"] - FADE:
-        print(f"  warning: {spans[-1][2]} runs past the end of {scene['id']}")
+    latest = None
+    for span in spans:
+        if latest and latest[1] - span[0] > 0.05:
+            print(f"  warning: in {scene['id']}, {latest[2]} runs {latest[1] - span[0]:.1f} s into {span[2]}")
+        if not latest or span[1] > latest[1]:
+            latest = span
+    if latest and latest[1] > events["duration"] - FADE:
+        print(f"  warning: {latest[2]} runs past the end of {scene['id']}")
+
+
+def preflight(scenes: list[dict[str, Any]], manifest: dict[str, Any], voice_requests: dict[str, str]) -> None:
+    """Before encoding anything: stop, listing every problem, if narration or a demo take is out of date."""
+    voiced = [(line_key(sc["id"], i), text) for sc in scenes for i, text in enumerate(sc["narration"])]
+    unvoiced = [key for key, text in [*voiced, *voice_requests.items()] if manifest.get(key, {}).get("text") != text]
+    problems = [f"not voiced as written: {', '.join(unvoiced)}; run narrate.py"] if unvoiced else []
+    for sc in scenes:
+        clip = CLIPS / sc["id"]
+        if not sc.get("demo") or unvoiced:
+            continue
+        if not (clip / "events.json").exists():
+            if not sc.get("only_if"):
+                problems.append(f"{sc['id']} is not recorded; run capture.py {sc['id']}")
+            continue
+        why = stale_take(sc, json.loads((clip / "events.json").read_text()), manifest)
+        if why:
+            problems.append(f"{sc['id']} is out of date ({why}); run capture.py {sc['id']}")
+    if problems:
+        raise SystemExit("\n".join(problems) + "\nthen make.py --no-capture")
 
 
 def demo_scene(scene: dict[str, Any], manifest: dict[str, Any], seg: Path, last: bool) -> dict[str, Any] | None:
@@ -117,15 +154,23 @@ def demo_scene(scene: dict[str, Any], manifest: dict[str, Any], seg: Path, last:
     if not (clip / "clip.mp4").exists():
         if scene.get("only_if"):
             return None
-        raise SystemExit(f"{scene['id']} is not recorded: run capture.py {scene['id']}")
+        raise SystemExit(f"{scene['id']} is not recorded: run capture.py {scene['id']}")  # preflight catches this first
     events = json.loads((clip / "events.json").read_text())
-    check_take(scene, events, manifest)
-    # Enlarged stretches: the marked part of the frame, scaled to fill it, laid over the clip.
+    check_overlaps(scene, events)
+    # Enlarged stretches: the marked element, scaled up (at most 2.2×) on the page's grey, laid over the clip.
     zooms = events.get("zooms", [])
     graph = f"[0:v]split={len(zooms) + 1}[v0]" + "".join(f"[z{i}]" for i in range(len(zooms))) + ";"
     for i, z in enumerate(zooms):
-        graph += (f"[z{i}]crop={z['w']}:{z['h']}:{z['x']}:{z['y']},scale={WIDTH}:{HEIGHT},setsar=1[zz{i}];"
-                  f"[v{i}][zz{i}]overlay=enable='between(t,{z['start']},{z['start'] + z['seconds']})'[v{i + 1}];")
+        k = min(WIDTH * 0.92 / z["w"], HEIGHT * 0.92 / z["h"], 2.2)
+        a, b = z["start"], z["start"] + z["seconds"]
+        if k < 1.15:  # too big to enlarge: leave the clip as it is
+            graph += f"[z{i}]nullsink;[v{i}]null[v{i + 1}];"
+            continue
+        w, h = round(z["w"] * k / 2) * 2, round(z["h"] * k / 2) * 2
+        graph += (f"[z{i}]crop={z['w']}:{z['h']}:{z['x']}:{z['y']},scale={w}:{h}:flags=lanczos,"
+                  f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={GREY},setsar=1,format=yuva420p,"
+                  f"fade=in:st={a}:d=0.2:alpha=1,fade=out:st={b - 0.2:.3f}:d=0.2:alpha=1[zz{i}];"
+                  f"[v{i}][zz{i}]overlay=enable='between(t,{a},{b})'[v{i + 1}];")
     graph += f"[v{len(zooms)}]{fades(events['duration'], last)}[out]"
     run(ffmpeg(), "-y", "-loglevel", "error", "-i", clip / "clip.mp4", "-filter_complex", graph, "-map", "[out]", *X264, seg)
     for a in events["audio"]:
@@ -134,22 +179,80 @@ def demo_scene(scene: dict[str, Any], manifest: dict[str, Any], seg: Path, last:
     return events
 
 
+def montage_scene(scene: dict[str, Any], manifest: dict[str, Any], parts: dict[str, dict[str, Any]], seg: Path,
+                  last: bool) -> dict[str, Any]:
+    """Pieces of rendered demo scenes, sped up as asked, with this scene's narration over them."""
+    trims, t, badges = [], 0.0, []
+    for i, piece in enumerate(scene["montage"]):
+        src = parts.get(piece["scene"])
+        if not src or "segment" not in src:
+            raise SystemExit(f"{scene['id']} cuts from {piece['scene']}, which is not recorded")
+
+        def at(ref: list[float]) -> float:
+            n, offset = ref
+            return src["lines"][n - 1]["start"] + offset
+
+        a, b, speed = at(piece["from"]), at(piece["to"]), piece.get("speed", 1)
+        trims.append(f"[{i}:v]trim={a:.3f}:{b:.3f},setpts=(PTS-STARTPTS)/{speed}[p{i}]")
+        if speed != 1:
+            badges.append((t, t + (b - a) / speed, speed))
+        t += (b - a) / speed
+    lines, end = [], LEAD
+    for i in range(len(scene["narration"])):
+        key = line_key(scene["id"], i)
+        lines.append({"key": key, "start": end})
+        end += manifest[key]["seconds"] + GAP
+    duration = max(t, end + scene.get("tail", TAIL) - GAP)
+    graph = ";".join(trims) + ";" + "".join(f"[p{i}]" for i in range(len(trims)))
+    graph += f"concat=n={len(trims)}:v=1:a=0,tpad=stop_mode=clone:stop_duration={duration - t + 0.1:.3f}"
+    if FONT.exists():
+        for a, b, speed in badges:
+            graph += (f",drawtext=fontfile={FONT}:text='{speed:g}× speed':fontsize=34:fontcolor=white:box=1:"
+                      f"boxcolor=0x141414@0.85:boxborderw=16:x=w-tw-64:y=64:enable='between(t,{a:.3f},{b:.3f})'")
+    graph += f",{fades(duration, last)}[out]"
+    inputs = [arg for piece in scene["montage"] for arg in ("-i", parts[piece["scene"]]["segment"])]
+    run(ffmpeg(), "-y", "-loglevel", "error", *inputs, "-filter_complex", graph, "-map", "[out]", *X264,
+        "-t", f"{duration:.3f}", seg)
+    return {"duration": duration, "lines": lines, "audio": []}
+
+
 def srt_time(t: float) -> str:
     ms = round(t * 1000)
     return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
-def spoken(script: str, seconds: float, full: float) -> str:
-    """The sentences of `script` heard in the first `seconds` of its `full` reading."""
+def subtitles(start: float, end: float, text: str, width: int = 42) -> list[tuple[float, float, str]]:
+    """`text` as cues of at most two lines of about `width` characters, timed by their share of the text."""
+    words, cues, line, lines = text.split(), [], "", []
+    for word in words:
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    lines.append(line)
+    chunks = ["\n".join(lines[i:i + 2]) for i in range(0, len(lines), 2)]
+    total, t = sum(len(c) for c in chunks), start
+    for chunk in chunks:
+        share = (end - start) * len(chunk) / total
+        cues.append((t, t + share, chunk))
+        t += share
+    return cues
+
+
+def spoken(script: str, seconds: float, full: float, sentences: int | None = None) -> str:
+    """The sentences of `script` heard in the first `seconds` of its `full` reading: the first
+    `sentences` if the recording says how many, else an estimate from their lengths."""
+    every = re.split(r"(?<=[.!?])\s+", script)
     if seconds >= full - 0.3 or not script:
         return script
-    heard, used, target = [], 0, len(script) * seconds / full
-    for sentence in re.split(r"(?<=[.!?])\s+", script):
-        if heard and used + len(sentence) / 2 > target:
-            break
-        heard.append(sentence)
-        used += len(sentence) + 1
-    return " ".join(heard) + " …"
+    if sentences is None:
+        sentences, used, target = 0, 0, len(script) * seconds / full
+        for sentence in every:
+            if sentences and used + len(sentence) / 2 > target:
+                break
+            sentences, used = sentences + 1, used + len(sentence) + 1
+    return " ".join(every[:sentences]) + (" …" if sentences < len(every) else "")
 
 
 def mix(sounds: list[dict[str, Any]], duration: float, dst: Path) -> None:
@@ -189,20 +292,36 @@ def main() -> None:
     voice_requests = json.loads((OUT.parent / "scenes.json").read_text()).get("voice_requests", {})
 
     scenes = load_scenes()
-    segments, timeline, cues, t = [], [], [], 0.0
-    for n, scene in enumerate(scenes):
-        seg = work / f"{len(segments):02d}-{scene['id']}.mp4"
+    preflight(scenes, manifest, voice_requests)
+    for old in work.glob("*.mp4"):  # segments of earlier builds, perhaps of scenes since renamed
+        old.unlink()
+    # Slides and demos first, then the montages that cut from the demos.
+    parts: dict[str, dict[str, Any]] = {}
+    for n, scene in sorted(enumerate(scenes), key=lambda ns: "montage" in ns[1]):
+        seg = work / f"{n:02d}-{scene['id']}.mp4"
         last = n == len(scenes) - 1
-        part = slide_scene(scene, manifest, seg, last) if "slide" in scene else demo_scene(scene, manifest, seg, last)
+        if "montage" in scene:
+            part = montage_scene(scene, manifest, parts, seg, last)
+        elif "slide" in scene:
+            part = slide_scene(scene, manifest, seg, last)
+        else:
+            part = demo_scene(scene, manifest, seg, last)
         if part is None:
             print(f"  {scene['id']}: not recorded (Help is not on Tencent ADP), left out")
             continue
-        segments.append(seg)
+        parts[scene["id"]] = {**part, "segment": seg}
+
+    segments, timeline, cues, t = [], [], [], 0.0
+    for scene in scenes:
+        part = parts.get(scene["id"])
+        if not part:
+            continue
+        segments.append(part["segment"])
         for line in part["lines"]:
             start = t + line["start"]
             timeline.append({"kind": "narration", "key": line["key"], "path": str(NARRATION / f"{line['key']}.wav"),
                              "start": start, "scene": scene["id"]})
-            cues.append((start, start + manifest[line["key"]]["seconds"], manifest[line["key"]]["text"]))
+            cues += subtitles(start, start + manifest[line["key"]]["seconds"], manifest[line["key"]]["text"])
         for a in part["audio"]:
             if a["kind"] == "chime":
                 continue
@@ -211,11 +330,11 @@ def main() -> None:
                 timeline.append({"kind": "chime", "path": str(work / "chime.wav"), "start": t + a["start"] - 0.45})
             if a["kind"] == "customer":  # the file starts with half a second of silence
                 text = a.get("text") or voice_requests.get(a["file"][4:-4], "")
-                cues.append((t + a["start"] + 0.5, t + a["start"] + 0.5 + manifest.get(a["file"][4:-4], {}).get("seconds", 3),
-                             f"[Customer] {text}"))
+                cues += subtitles(t + a["start"] + 0.5, t + a["start"] + 0.5 + manifest.get(a["file"][4:-4], {}).get("seconds", 3),
+                                  f"[Customer] {text}")
             elif a["kind"] == "bank":
-                cues.append((t + a["start"], t + a["start"] + a["seconds"],
-                             f"[Bank voice] {spoken(a.get('script', ''), a['seconds'], a.get('full_seconds', a['seconds']))}"))
+                heard = spoken(a.get("script", ""), a["seconds"], a.get("full_seconds", a["seconds"]), a.get("sentences"))
+                cues += subtitles(t + a["start"], t + a["start"] + a["seconds"], f"[Bank voice] {heard}")
         t += part["duration"]
     duration = t
 

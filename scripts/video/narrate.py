@@ -4,7 +4,8 @@
     uv run python scripts/video/narrate.py --force    # synthesise every line again
 
 A line recorded by a person wins: video/voice/<key>.wav (or .m4a, .mp3, .aiff)
-is used as is, converted to 24 kHz mono. Every other line is spoken by the AI
+is used instead, converted to 24 kHz mono, trimmed of silence at both ends and
+brought to the AI narrator's loudness (-26 LUFS). Every other line is spoken by the AI
 narrator, a TRTC voice (GV_TRTC_* and GV_TENCENT_SECRET_* in .env) that is not
 the bank's own voice, so the two are never confused; without TRTC, macOS `say`
 stands in. Output: video/out/narration/<key>.wav and manifest.json (each
@@ -29,6 +30,9 @@ from vidlib import NARRATION, SCENES, VOICE, line_key, load_scenes, to_wav, wav_
 
 NARRATOR_VOICE = "v-male-P6q7LzD8"  # TRTC "Gentle Mentor"; the bank voice is female
 RECORDED = (".wav", ".m4a", ".mp3", ".aiff")
+# Trim silence at both ends (reverse, trim the start, reverse back), then match the TRTC narrator's loudness.
+TRIM = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1"
+CLEAN = f"{TRIM},areverse,{TRIM},areverse,loudnorm=I=-26:TP=-3:LRA=11"
 
 
 def narrator():
@@ -60,7 +64,7 @@ def main() -> None:
         dst = NARRATION / f"{key}.wav"
         recorded = next((VOICE / f"{key}{ext}" for ext in RECORDED if (VOICE / f"{key}{ext}").exists()), None)
         if recorded:
-            to_wav(recorded, dst)
+            to_wav(recorded, dst, CLEAN)
             source = f"recorded:{recorded.name}"
         else:
             source = engine
