@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glass Vault cover</title>
+<style>
+  :root {
+    --red: #ff3333; --red-deep: #d91f1f; --ink: #141414; --muted: #5d5d5d; --line: #e6e6e6;
+    --ok: #0f7a4f; --ok-soft: #e3f5ec; --bad: #b42318; --bad-soft: #fdecea;
+    font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1520px; height: 864px; overflow: hidden; background: #fafafa; color: var(--ink); }
+  .cover { display: grid; grid-template-columns: 900px 620px; height: 100%; }
+
+  /* Left: name, promise, how it works */
+  .left { padding: 92px 0 72px 96px; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 18px; font-weight: 750; letter-spacing: 0.12em; font-size: 22px; color: var(--muted); }
+  .brand img { width: 52px; height: 52px; }
+  h1 { margin-top: 44px; font-size: 128px; line-height: 0.95; font-weight: 800; letter-spacing: -0.035em; }
+  .promise { margin-top: 30px; font-size: 46px; line-height: 1.18; font-weight: 600; letter-spacing: -0.01em; }
+  .promise em { font-style: normal; color: var(--red); }
+  .flow { margin-top: auto; display: flex; align-items: center; gap: 8px; }
+  .step { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-radius: 14px;
+          background: #fff; border: 2px solid var(--line); font-size: 20px; font-weight: 650; white-space: nowrap; }
+  .step b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+            background: var(--ink); color: #fff; font-size: 17px; }
+  .step.key { border-color: var(--red); }
+  .step.key b { background: var(--red); }
+  .arrow { color: #b5b5b5; font-size: 20px; font-weight: 700; }
+  .stack { margin-top: 26px; font-size: 22px; color: var(--muted); letter-spacing: 0.01em; }
+  .stack strong { color: var(--ink); font-weight: 650; }
+
+  /* Right: the phone shows the idea */
+  .right { background: var(--red); position: relative; overflow: hidden; }
+  .right::before { content: ""; position: absolute; inset: auto -120px -160px auto; width: 520px; height: 520px;
+                   border-radius: 50%; background: var(--red-deep); opacity: 0.55; }
+  .phone { position: absolute; left: 92px; top: 70px; width: 440px; height: 860px; border-radius: 64px;
+           background: #111; padding: 16px; box-shadow: 0 40px 80px rgba(0,0,0,0.28); }
+  .screen { width: 100%; height: 100%; border-radius: 50px; background: #fff; overflow: hidden; position: relative; }
+  .island { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); width: 126px; height: 36px;
+            border-radius: 20px; background: #111; }
+  .bar { background: var(--red); color: #fff; padding: 74px 30px 22px; font-weight: 800; font-size: 19px; letter-spacing: 0.12em; }
+  .chat { padding: 22px 22px 0; display: flex; flex-direction: column; gap: 16px; }
+  .bubble { align-self: flex-end; max-width: 86%; background: #ffdcdc; border-radius: 22px 22px 6px 22px;
+            padding: 14px 18px; font-size: 20px; line-height: 1.3; }
+  .card { border: 2px solid var(--line); border-radius: 22px; padding: 18px 20px; }
+  .card h3 { font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 750; }
+  .card p { margin-top: 8px; font-size: 22px; line-height: 1.3; font-weight: 650; }
+  .card .sub { margin-top: 4px; font-size: 17px; color: var(--muted); font-weight: 500; }
+  .approve { margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 10px; height: 52px;
+             border-radius: 14px; background: var(--ink); color: #fff; font-size: 19px; font-weight: 700; }
+  .approve svg { width: 24px; height: 24px; }
+  .frozen { background: var(--bad-soft); border-color: #f5c2bd; }
+  .frozen h3 { color: var(--bad); }
+  .frozen p { font-size: 19px; }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <section class="left">
+      <div class="brand">
+        <img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='2.4' fill='%23ff3333'/%3E%3Cpath fill='%23fff' d='M7.97 15.07A7.6 7.6 0 1 1 23.17 15.07A7.6 7.6 0 1 1 7.97 15.07ZM20.98 18.00 L32.64 29.67 L30.17 32.14 L18.50 20.48ZM24.23 26.20 L26.21 28.18 L23.49 30.91 L21.51 28.93ZM27.48 29.46 L30.17 32.14 L28.15 34.16 L25.47 31.47ZM16.57 15.73A2.25 2.25 0 1 0 14.57 15.73L13.82 18.82L17.32 18.82Z'/%3E%3C/svg%3E">
+        DBS TRACK · TENCENT CLOUD HACKATHON 2026
+      </div>
+      <h1>Glass Vault</h1>
+      <p class="promise">The AI drafts.<br><em>Only your face moves money.</em></p>
+      <div class="flow">
+        <span class="step"><b>1</b>Speak</span><span class="arrow">→</span>
+        <span class="step"><b>2</b>AI drafts</span><span class="arrow">→</span>
+        <span class="step"><b>3</b>Code checks</span><span class="arrow">→</span>
+        <span class="step key"><b>4</b>Face ID signs</span>
+      </div>
+      <p class="stack"><strong>Tencent RTC</strong> voice · <strong>Hunyuan</strong> validator · built with <strong>WorkBuddy</strong></p>
+    </section>
+
+    <section class="right">
+      <div class="phone"><div class="screen">
+        <div class="island"></div>
+        <div class="bar">GLASS VAULT BANK</div>
+        <div class="chat">
+          <div class="bubble">Send mum 300 for groceries</div>
+          <div class="card">
+            <h3>Confirm 1 instruction</h3>
+            <p>S$300.00 to Tan Mei Ling</p>
+            <p class="sub">PayNow · from Savings Account</p>
+            <div class="approve">
+              <svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20v-6a8 8 0 0 1 8-8h6M44 6h6a8 8 0 0 1 8 8v6M58 44v6a8 8 0 0 1-8 8h-6M20 58h-6a8 8 0 0 1-8-8v-6"/><path d="M23 24v5M41 24v5M32 24v12.5h-3M23.5 44.5c4.8 4.2 12.2 4.2 17 0"/></svg>
+              Approve with Face ID
+            </div>
+          </div>
+          <div class="card frozen">
+            <h3>Rogue AI draft · frozen</h3>
+            <p>Hidden S$9,000 transfer stopped. Nothing was sent.</p>
+          </div>
+        </div>
+      </div></div>
+    </section>
+  </div>
+</body>
+</html>
