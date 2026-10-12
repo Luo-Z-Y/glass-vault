@@ -57,6 +57,8 @@
               <div class="phone-bank"><span class="brand-mark" aria-hidden="true"></span>Glass Vault Bank</div>
               <div class="phone-customer" id="customer-name">…</div>
             </div>
+            <button id="help-btn" class="chip help" type="button" title="Questions about how the bank works"
+                    aria-haspopup="dialog" aria-controls="help-sheet" aria-expanded="false">Help</button>
             <button id="passkey-btn" class="chip" title="Register this device's passkey (Face ID / Touch ID)">Set up Face ID</button>
           </div>
           <div class="balances" id="balances"></div>
@@ -82,6 +84,38 @@
             </button>
           </div>
         </form>
+
+        <!-- Help: the bank FAQ assistant, a sheet over the app. It has its own messages and never
+             writes to the chat above, and the bank voice never reads its answers. The notice is set
+             by app.js from who answers (Tencent ADP or the built-in FAQ). The sheet takes focus
+             when clicked (tabindex -1), so Escape still closes it after a click on its text. -->
+        <div class="help-layer" id="help-layer">
+          <div class="help-scrim" id="help-scrim" aria-hidden="true"></div>
+          <div class="help-sheet" id="help-sheet" role="dialog" aria-labelledby="help-title" aria-describedby="help-notice" tabindex="-1">
+            <div class="help-head">
+              <h2 id="help-title">Help · bank FAQ</h2>
+              <button type="button" class="help-close" id="help-close" aria-label="Close Help">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>
+              </button>
+            </div>
+            <p class="help-notice" id="help-notice">Answers come word for word from the bank's FAQ. Help can't see your accounts or move money.</p>
+            <div class="help-log" id="help-log" aria-live="polite">
+              <div class="help-suggest" id="help-suggest">
+                <button type="button" class="suggest">What are my transfer limits?</button>
+                <button type="button" class="suggest">Why is my payment on hold?</button>
+                <button type="button" class="suggest">How do I approve a payment?</button>
+              </div>
+            </div>
+            <form class="composer help-composer" id="help-form" autocomplete="off">
+              <div class="field">
+                <input id="help-input" type="text" maxlength="300" placeholder="Ask how the bank works" aria-label="Question for Help">
+                <button type="submit" class="send" id="help-send" aria-label="Ask Help">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
         <span class="home-indicator" aria-hidden="true"></span>
       </div>
     </section>
@@ -155,6 +189,24 @@
               <div class="model-host" id="tts-host"></div>
               <div class="card-sub">Reads only scripts the bank rendered, fetched by their SHA-256. It takes no text from the page.</div>
               <div class="voice-activity idle" id="tts-activity">Idle</div>
+            </div>
+          </section>
+
+          <section class="console faq" aria-label="Help service">
+            <div class="console-head">
+              <h2>Help service</h2>
+              <span class="console-sub">Tencent ADP: the bank's FAQ assistant</span>
+              <span id="faq-status" class="pill">…</span>
+            </div>
+            <p class="voice-note" id="faq-note" hidden>No ADP app key set: Help answers from the built-in FAQ.
+              Run <code>uv run python scripts/adp_setup.py</code> to set up the ADP app.</p>
+
+            <div class="card model" id="faq-card">
+              <div class="model-role">FAQ assistant</div>
+              <div class="model-name" id="faq-name">…</div>
+              <div class="model-host" id="faq-host"></div>
+              <div class="card-sub" id="faq-sub">…</div>
+              <div class="voice-activity idle" id="faq-activity">Idle</div>
             </div>
           </section>
         </div>

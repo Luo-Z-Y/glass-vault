@@ -10,7 +10,10 @@ from the browser's passkey straight to `Gateway.execute`.
 Without GV_LLM_API_KEY the drafter and validator run on `OfflineLLM`, so the
 whole flow works with no API key. With the TRTC settings (see `voice.py`), the
 bank voice is TRTC text-to-speech and push-to-talk is TRTC speech recognition;
-without them, the browser's own speech is used.
+without them, the browser's own speech is used. With GV_ADP_APP_KEY (see `faq.py`),
+Help, the bank FAQ assistant, is a Tencent ADP knowledge-Q&A app; without it, Help
+answers from the built-in FAQ. Help stands apart from the payment conversation: its
+words never enter the dialogue, the audit log or the bank voice.
 """
 
 from __future__ import annotations
@@ -32,10 +35,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from .. import faq
 from ..audit import AuditLog
 from ..bank import Bank, seed_bank
 from ..crypto import DeviceKey, challenge_digest
 from ..evaluator import resolve
+from ..faq import AdpHelp, new_conversation_id
 from ..gateway import DeviceKeyVerifier, Gateway, GatewayError
 from ..llm import LLM
 from ..offline import OfflineLLM
@@ -102,6 +107,9 @@ class Demo:
     audio: dict[str, bytes] = field(default_factory=dict)
     voice_lock: threading.Lock = field(default_factory=threading.Lock)
     synthesising: dict[str, threading.Lock] = field(default_factory=dict)  # per script: one TRTC call at a time
+    faq: AdpHelp | None = None  # Help's Tencent ADP app; None: the built-in FAQ answers
+    # Help's ADP conversation, so a follow-up question has its context. A reset starts a new one.
+    faq_conversation: str = field(default_factory=new_conversation_id)
 
     @property
     def pipeline(self) -> Pipeline:
@@ -138,7 +146,8 @@ def new_demo() -> Demo:
     gateway.register_device(bank.customer_id, phone.public_bytes)
     drafter, validator, mode = _llms(bank)
     tts, asr = voice_from_env()
-    return Demo(bank, audit, gateway, verifier, phone, token, drafter, validator, mode, tts=tts, asr=asr)
+    return Demo(bank, audit, gateway, verifier, phone, token, drafter, validator, mode, tts=tts, asr=asr,
+                faq=faq.faq_from_env())
 
 
 demo = new_demo()
@@ -176,6 +185,7 @@ def state_json() -> dict[str, Any]:
                     "simulated_allowed": not demo.verifier.has_passkey(customer)},
         "attacks": {"blocked": demo.blocked, "funds_moved": str(demo.funds_moved)},
         "voice": voice_json(),
+        "faq": faq_json(),
     }
 
 
@@ -196,6 +206,17 @@ def voice_json() -> dict[str, Any]:
         listen = {"engine": "trtc", "name": asr.name, "host": getattr(asr, "host", None),
                   "model": getattr(asr, "engine", None), "language": getattr(asr, "language", None) or "auto"}
     return {"speak": speak, "listen": listen}
+
+
+def faq_json() -> dict[str, Any]:
+    """Who answers Help: a Tencent ADP app where one is set up, otherwise the built-in FAQ.
+
+    The name and host are for display only, so a stand-in that lacks them (a test double, say)
+    still works, as with voice_json().
+    """
+    if demo.faq is None:
+        return {"engine": "offline", "name": None, "host": None}
+    return {"engine": "adp", "name": getattr(demo.faq, "name", None), "host": getattr(demo.faq, "host", None)}
 
 
 MAX_SCRIPTS = 64
@@ -321,15 +342,15 @@ def _refusal(code: str, status: int, message: str) -> JSONResponse:
     return JSONResponse({"code": code, "status": status, "message": message}, status_code=status)
 
 
-def _cross_site(request: Request) -> JSONResponse | None:
-    """Refuse a call from another site: these endpoints spend TRTC credit."""
+def _cross_site(request: Request, service: str = "the bank's voice") -> JSONResponse | None:
+    """Refuse a call from another site: these endpoints spend TRTC or ADP credit."""
     site = request.headers.get("sec-fetch-site")
     origin = request.headers.get("origin")
     # Hosts, not schemes (behind an HTTPS proxy the page's scheme differs from the server's), and the
     # configured public origin as well as the Host header (a proxy may rewrite Host).
     own = {request.headers.get("host", ""), urlsplit(ORIGIN).netloc}
     if site not in (None, "same-origin", "none") or (origin is not None and urlsplit(origin).netloc not in own):
-        return _refusal("CROSS_SITE", 403, "only this page may use the bank's voice")
+        return _refusal("CROSS_SITE", 403, f"only this page may use {service}")
     return None
 
 
@@ -382,6 +403,39 @@ async def transcribe(request: Request):
     except VoiceError as e:
         return _refusal(e.code, 400 if e.code in ("BAD_AUDIO", "AUDIO_TOO_LONG") else 502, e.message)
     return {"text": text}
+
+
+# --- Help (Tencent ADP) ------------------------------------------------------------------
+
+
+class FaqRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/faq")
+def ask_faq(req: FaqRequest, request: Request):
+    """Help's answer to a general question about the bank: from Tencent ADP, or the built-in FAQ.
+
+    Help stands apart from the payment conversation. This reads and writes nothing but Help's
+    own ADP conversation: not the dialogue, the bank's scripts or audio, the gateway or the
+    audit log. So a question here never counts as something the customer told the agent, and
+    an answer, which ADP's model wrote, never reaches the bank voice or moves money.
+    """
+    if (refused := _cross_site(request, "Help")) is not None:  # an ADP call spends the account's credit
+        return refused
+    try:
+        question = faq.check_question(req.text)
+    except faq.HelpError as e:
+        return _refusal(e.code, 400, e.message)
+    answer = faq.answer(question, demo.faq, conversation_id=demo.faq_conversation)
+    return {
+        "answer": {"text": answer.text, "source": answer.source, "matched": answer.matched,
+                   "references": list(answer.references), "note": answer.note},
+        "faq": faq_json(),
+    }
+
+
+# --- Cancelling and approving -------------------------------------------------------------
 
 
 @app.post("/api/cancel")
