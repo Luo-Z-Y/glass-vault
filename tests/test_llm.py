@@ -262,7 +262,7 @@ def test_env_example_lists_every_setting():
     from pathlib import Path
 
     example = (Path(__file__).parents[1] / ".env.example").read_text()
-    for var in GV_VARS:
+    for var in (*GV_VARS, "GV_ADP_APP_KEY", "GV_ADP_CHAT_URL"):  # the model settings, then Help's (faq.py)
         assert var in example, var
     assert "sk-" not in example  # no real keys
 

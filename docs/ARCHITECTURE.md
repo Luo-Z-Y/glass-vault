@@ -99,11 +99,12 @@ FastAPI + Uvicorn process; the gateway can also run as its own service (see
 |---|---|
 | Customer app | HTML, CSS and vanilla JavaScript with no build step; push-to-talk recorded with an AudioWorklet; WebAuthn passkeys (Face ID / Touch ID) |
 | Voice | Tencent RTC (TRTC): FlowTTS text-to-speech for the bank voice and sentence recognition for push-to-talk, called from the server (`voice.py`); the browser's Web Speech API and `speechSynthesis` when TRTC is not set up |
+| Help | Tencent ADP (Agent Development Platform): a published knowledge-Q&A app over `faq.md`, asked through ADP's v2 HTTP SSE chat API with httpx (`faq.py`); the FAQ itself, matched by keyword overlap, when ADP is not set up or fails |
 | Server | Python 3.12, FastAPI + Uvicorn, Pydantic v2 models, `Decimal` for every amount |
 | AI | OpenAI Python SDK against any OpenAI-compatible API: DeepSeek by default (`deepseek-flash` drafts, `deepseek-v4-pro` validates), Tencent Hunyuan `hy3` via TokenHub as an option, and a rule-based offline stand-in when no key is set |
 | Security | `webauthn` (py_webauthn) for passkeys, `cryptography` for Ed25519 device keys, SHA-256 over canonical JSON for plan hashes and the audit chain, HMAC-SHA256 for step-up codes |
 | Data | In-memory mock bank; the audit log is kept in memory, and the gateway service can also append it to a JSONL file |
-| Tooling | uv and hatchling, pytest (~1,190 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
+| Tooling | uv and hatchling, pytest (~1,300 tests), PyYAML benchmark cases, python-dotenv, httpx for the gateway client |
 
 ## Codebase map
 
@@ -125,7 +126,7 @@ flowchart TB
             g_web["📁 web/ · demo server<br/>server.py"]
             g_static["📁 web/static/<br/>customer app<br/>index.html · app.js<br/>app.css · pcm-recorder.js"]
             g_evals["📁 evals/ · harness<br/>harness.py · dataset.py<br/>naive.py · __main__.py"]
-            g_demo["🎭 Demo, rogue AI, voice<br/>demo.py · rogue.py<br/>voice.py (TRTC)"]
+            g_demo["🎭 Demo, rogue AI, voice, Help<br/>demo.py · rogue.py<br/>voice.py (TRTC)<br/>faq.py (ADP) · faq.md"]
             g_agent ~~~ g_shared ~~~ g_evals
             g_control ~~~ g_services ~~~ g_demo
             g_gateway ~~~ g_web ~~~ g_static
@@ -134,8 +135,8 @@ flowchart TB
             direction TB
             r_evals["📁 evals/ · test cases<br/>cases.yaml · 84 cases<br/>heldout.yaml · 20 cases<br/>heldout2.yaml · 20 cases<br/>results/"]
             r_docs["📁 docs/<br/>architecture · contracts<br/>threat model · LLM choice<br/>WorkBuddy log"]
-            r_tests["📁 tests/<br/>22 modules<br/>~1,190 tests"]
-            r_project["⚙️ Project root<br/>README.md · uv.lock<br/>pyproject.toml<br/>.env.example<br/>scripts/playground.py"]
+            r_tests["📁 tests/<br/>25 modules<br/>~1,300 tests"]
+            r_project["⚙️ Project root<br/>README.md · uv.lock<br/>pyproject.toml<br/>.env.example<br/>scripts/playground.py<br/>scripts/adp_setup.py"]
         end
         pkg ~~~ rest
     end
@@ -239,13 +240,15 @@ audit log (step 12).
     with text that is not valid Unicode is treated as a malformed tool call, so
     it never reaches the customer or the log.
 
-What the customer reads is never free LLM text, with one exception. Outcome
+What the customer reads is never free LLM text, with two exceptions. Outcome
 messages are fixed templates, the confirmation is rendered from templates and
-bank records, and the control plane's own questions are templates. A
-clarifying question from the drafter or the validator is rebuilt from a
-template when its options are two or more bank records or amounts ("Which payee
-do you mean: …?"); otherwise the model's question is shown, cut to 300
-characters.
+bank records, and the control plane's own questions are templates. The first
+exception: a clarifying question from the drafter or the validator is rebuilt
+from a template when its options are two or more bank records or amounts
+("Which payee do you mean: …?"); otherwise the model's question is shown, cut
+to 300 characters. The second is an answer from Help, the bank FAQ assistant,
+shown only in its own panel and labelled as AI-written; it never enters the
+dialogue this pipeline reads (see [Help](#help-bank-faq)).
 
 ## Approval and execution
 
@@ -370,15 +373,20 @@ gateway service.
 
 ## The AI layer
 
-`llm.py` is the only code that calls a model: OpenAI-compatible chat
-completions, configured by `GV_*` settings from the environment or `.env`. The
-drafter and the validator are built separately (`GV_DRAFTER_MODEL`,
-`GV_VALIDATOR_MODEL`, and optionally `GV_VALIDATOR_BASE_URL` /
-`GV_VALIDATOR_API_KEY`), so the validator can be a different model family.
+`llm.py` is the only code in the money path that calls a model:
+OpenAI-compatible chat completions, configured by `GV_*` settings from the
+environment or `.env`. The drafter and the validator are built separately
+(`GV_DRAFTER_MODEL`, `GV_VALIDATOR_MODEL`, and optionally
+`GV_VALIDATOR_BASE_URL` / `GV_VALIDATOR_API_KEY`), so the validator can be a
+different model family.
 Stand-ins share the same interface: `OfflineLLM` (rule-based; the web demo uses
 it for both roles when no API key is set), `ScriptedLLM` (tests), and
 `RogueLLM`, which wraps the drafter and rewrites each plan with one of five
 attacks.
+
+The one other language model is Help's Tencent ADP app (`faq.py`), outside the
+money path (TRTC's speech models in `voice.py` are covered under [Voice](#voice)): it answers general questions from the FAQ, has no tools, and
+nothing it writes reaches the pipeline (see [Help](#help-bank-faq)).
 
 ## Voice
 
@@ -414,6 +422,56 @@ browser's own speech.
 Settings: `GV_TRTC_SDK_APP_ID`, `GV_TENCENT_SECRET_ID` and
 `GV_TENCENT_SECRET_KEY` turn on the voice; `GV_TRTC_SDK_APP_ID` and
 `GV_TRTC_SDK_SECRET_KEY` turn on recognition (see `.env.example`).
+
+## Help (bank FAQ)
+
+`faq.py` answers general questions about the demo bank (limits, approvals, new
+payees, share buys, what the assistant can do) in a Help panel of its own,
+beside the payment chat, through `POST /api/faq`. All it knows is `faq.md`, a
+mock FAQ of 29 entries, each with the other ways customers ask it ("Also asked
+as"). One of two engines answers:
+
+- **Tencent ADP** (Agent Development Platform), when `GV_ADP_APP_KEY` is set: a
+  published knowledge-Q&A app built from `faq.md`, asked through ADP's v2 HTTP
+  SSE chat API (`AdpHelp`). The AppKey travels in the JSON body; there is no
+  signature. ADP answers HTTP 200 even when a request fails, so errors are read
+  from the `error` events in the stream. Only `reply` messages count, never the
+  model's thoughts. The stream is read in chunks with a deadline and a size cap
+  checked on each one, so a stalled or endless stream cannot hold a worker; an
+  error code from ADP reaches the page only if it looks like a plain code. Each
+  demo session is one ADP conversation; `/api/reset` starts a new one.
+- **The built-in FAQ**, when ADP is not set up, or if it fails in any way: the
+  entry of `faq.md` whose question, other phrasings and answer best overlap the
+  question's keywords (an entry is a candidate only if a word of the question
+  appears in its question or other phrasings) (with synonyms such as "OTP" for "token", simple stemming
+  and IDF weights). That is fixed FAQ text, not a model's; a question that
+  matches no entry well enough gets a fixed reply pointing to the main chat.
+  When ADP failed, the answer carries a note saying so.
+
+Help is kept out of the money path by construction:
+
+- It has no tools and no account data. The ADP app knows only the FAQ, and
+  `faq.py` never reads the bank.
+- Its questions and answers never enter the payment dialogue, so they never
+  reach the pipeline or the audit log, and can never count as something the
+  customer said or the agent asked. Nor do they reach the bank voice, which
+  speaks only scripts the control plane rendered.
+- An ADP answer is model-written, so the page shows it only in the Help panel,
+  labelled as AI-written. Before that, the server reduces it to plain text
+  (Markdown emphasis and headings removed) and caps it at 1,200 characters,
+  cut at a sentence. It is withheld, with a fixed reply in its place, if it is
+  not valid text or `context.scan_text` finds instruction-like text in it.
+  Questions are capped at 300 characters.
+- `POST /api/faq` refuses calls from other sites (`Sec-Fetch-Site` and
+  `Origin`, the same check as the voice endpoints), since each ADP call spends
+  the account's credit.
+
+Settings: `GV_ADP_APP_KEY` turns on ADP, and `GV_ADP_CHAT_URL` (optional, https
+only) points it at another ADP site; the default is the international one.
+`uv run python scripts/adp_setup.py` creates or updates the ADP app from
+`faq.md`, publishes it and writes `GV_ADP_APP_KEY` to `.env`, calling ADP with
+`GV_TENCENT_SECRET_ID` and `GV_TENCENT_SECRET_KEY`; with `--check` it only
+checks access (see `.env.example`).
 
 ## Adversarial review (29 Sep)
 
@@ -466,3 +524,11 @@ money moving before the audit write, and unaudited non-gateway errors.
   (recognition is not in the free trial). The customer's page sits in the
   trusted device zone: a compromised page could replay a recent bank script or
   speak in its own voice.
+- Help's FAQ is mock content about the demo bank. An ADP answer is written by a
+  model from it and can be wrong; the panel labels it as AI-written, and it
+  never reaches a payment. The built-in fallback matches keywords, not meaning:
+  an unusual phrasing can get the fixed "general questions only" reply, or a
+  related but wrong entry, which is shown with the FAQ question it answers.
+  `/api/faq` refuses other sites but has no rate limit beyond ADP's own. Which
+  models an ADP app can use depends on the site and plan; `scripts/adp_setup.py
+  --check` lists them.

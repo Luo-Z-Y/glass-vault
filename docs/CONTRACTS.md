@@ -274,6 +274,60 @@ The web demo exposes them as `GET /api/voice/{script_hash}` (only scripts the
 control plane rendered; 404 otherwise) and `POST /api/asr` (an `audio/wav` body,
 else 415; returns `{text}`). Both answer 403 to a call from another site.
 
+## faq.py: Help, the bank FAQ assistant (Tencent ADP)
+
+```python
+@dataclass(frozen=True)
+class FaqEntry: question: str; answer: str; also: tuple[str, ...] = ()   # "Also asked as" phrasings
+@dataclass(frozen=True)
+class HelpAnswer:
+    text: str
+    source: Literal["adp", "offline"]
+    matched: str | None = None         # offline: the FAQ question answered; None if nothing matched
+    references: tuple[str, ...] = ()   # ADP: names of the knowledge it cited
+    note: str | None = None            # e.g. why the built-in FAQ answered instead of ADP
+class HelpError(Exception): code: str; message: str
+    # ADP's error code, or ours: EMPTY_QUESTION, BAD_TEXT, HTTP_<status>, UNREACHABLE, TIMEOUT, EMPTY_ANSWER
+
+def load_faq(text: str | None = None) -> tuple[FaqEntry, ...]   # the "## question" entries of faq.md
+def answer_offline(question: str, entries: Sequence[FaqEntry] | None = None) -> HelpAnswer
+    # the best entry by keyword overlap (synonyms, stems, IDF weights); a fixed reply if none scores MIN_SCORE
+def check_question(text: str) -> str        # whitespace collapsed, <= 300 chars; HelpError EMPTY_QUESTION / BAD_TEXT
+def clean_answer(text: str) -> str | None   # plain text, <= 1,200 chars cut at a sentence; None if
+                                            # it is not valid text or context.scan_text flags it
+
+class AdpHelp:      # AdpHelp(app_key, url=ADP_CHAT_URL, visitor_id="glassvault-demo",
+                    #         timeout=20.0 for the whole answer, http)
+    name: str; host: str                    # for display: "Tencent ADP · knowledge Q&A", the chat URL's host
+    def ask(self, question: str, *, conversation_id: str) -> HelpAnswer
+        # POST to the v2 chat API, AppKey in the JSON body, SSE reply; only "reply" messages count.
+        # An error event (sent under HTTP 200) raises HelpError; an answer clean_answer rejects
+        # becomes a fixed "can't show that answer" reply with a note.
+def answer(question: str, adp: AdpHelp | None, *, conversation_id: str) -> HelpAnswer
+    # ADP when it is set up; the built-in FAQ otherwise, or if ADP fails (with a note saying so)
+def new_conversation_id() -> str            # 32 hex chars, an ADP ConversationId; one per demo session
+def faq_from_env(environ: Mapping[str, str] | None = None) -> AdpHelp | None
+# env, falling back to .env: GV_ADP_APP_KEY (None without it);
+#   optional: GV_ADP_CHAT_URL (https only; default https://wss.lke.tencentcloud.com/adp/v2/chat)
+```
+`scripts/adp_setup.py` creates or updates the ADP app from `faq.md`, publishes
+it and writes `GV_ADP_APP_KEY` to `.env`, using `GV_TENCENT_SECRET_ID` /
+`GV_TENCENT_SECRET_KEY`; `--check` only checks access.
+
+The web demo builds `Demo.faq` with `faq_from_env()` and keeps one
+`Demo.faq_conversation` (`new_conversation_id()`), so `POST /api/reset` starts a
+new ADP conversation. It exposes Help as `POST /api/faq` with `{"text": str}`:
+
+- a call from another site is 403 `CROSS_SITE` (each ADP call spends credit);
+- a question `check_question` refuses is 400 `EMPTY_QUESTION` or `BAD_TEXT`, as
+  `{code, status, message}`;
+- otherwise 200 `{"answer": {text, source, matched, references, note}, "faq":
+  {engine, name, host}}`, where `engine` is `"adp"` or `"offline"` (`name` and
+  `host` are `None` offline). `GET /api/state` carries the same `faq` object.
+
+Help's questions and answers never enter `Demo.dialogue`, the pipeline, the
+audit log or the bank voice.
+
 ## services/: HTTP split (agent zone vs gateway zone)
 
 - `services/gateway_api.py`: FastAPI app factory
