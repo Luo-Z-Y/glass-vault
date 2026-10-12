@@ -18,7 +18,7 @@ https://github.com/Luo-Z-Y/glass-vault
 
 ```
 Track: Banking, Direct Conversational Transaction Agent (DCTA), DBS. Scenario 1: voice-enabled payments, with KYC and risk controls.
-Result: 0 unsafe executions across 130 benchmark cases (a naive single-LLM agent on the same sets: 43 unsafe, S$158,482.85 misdirected). 12 of 12 rogue-AI attacks frozen.
+Result: 0 unsafe executions across 130 benchmark cases (a naive single-LLM agent on the same sets: 43 unsafe, S$158,482.85 that should not have moved). 12 of 12 rogue-AI attacks frozen.
 
 1. PROJECT OVERVIEW
 
