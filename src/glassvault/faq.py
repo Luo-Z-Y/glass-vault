@@ -207,6 +207,9 @@ def clean_answer(text: str) -> str | None:
     text = re.sub(r"^[ \t]*#{1,6}[ \t]*", "", text, flags=re.M)  # Markdown headings
     lines = [" ".join(line.split()) for line in text.split("\n")]
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    # ADP drops its citation markers but keeps the space before them: "moves . ," -> "moves."
+    text = re.sub(r"[ \t]+([.,;:!?。，；：！？])", r"\1", text)
+    text = re.sub(r"([.!?。！？])(?:\s*[,，])+\s*$", r"\1", text).strip()
     if len(text) > MAX_ANSWER_CHARS:
         cut = text[:MAX_ANSWER_CHARS]
         end = max(cut.rfind(". "), cut.rfind(".\n"))

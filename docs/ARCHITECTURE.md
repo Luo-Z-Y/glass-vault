@@ -473,6 +473,19 @@ only) points it at another ADP site; the default is the international one.
 `GV_TENCENT_SECRET_ID` and `GV_TENCENT_SECRET_KEY`; with `--check` it only
 checks access (see `.env.example`).
 
+Two ADP settings keep answers grounded, both found by measuring the live app
+(every FAQ question asked, each answer's `ReplyMethod` recorded):
+
+- **Answer routes.** `IntentAchievements` is set to documents, then Q&A pairs,
+  and leaves out `llm`, the model answering on its own. With the list left
+  empty, ADP's router sent about a third of FAQ questions straight to the
+  model, at random, and it invented rules ("up to 30 days to approve", "supports
+  Tamil"). With `llm` left out, all 33 test questions were answered from the FAQ
+  (`ReplyMethod` 12) in two full runs, and off-topic ones got the fixed reply.
+- **The FAQ goes in as one document** (`SaveDoc`, scope "debug and release").
+  Q&A pairs created through the international API are debug-only, which the
+  published app the chat API talks to never sees.
+
 ## Adversarial review (29 Sep)
 
 An independent multi-agent review attacked the week-1 core and confirmed these,

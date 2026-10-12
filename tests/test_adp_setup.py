@@ -320,6 +320,8 @@ def test_setup_creates_the_app_uploads_the_faq_releases_and_writes_the_key(tmp_p
     assert qa["Model"] == {"Name": "deepseek-v4-flash", "AliasName": "DeepSeek-V4-Flash", "HistoryLimit": 5,
                            "IsUseContext": True}
     assert qa["RoleDescription"] == adp.ROLE and "not DBS" in qa["RoleDescription"]
+    # Only grounded answers: documents, then Q&A pairs, never the model alone.
+    assert qa["IntentAchievements"] == [{"Name": "doc"}, {"Name": "qa"}]
     assert qa["Greeting"] == adp.GREETING and qa["Pattern"] == "standard"
     assert qa["Output"] == {"Method": 1, "UseGeneralKnowledge": False, "BareAnswer": adp.BARE_ANSWER,
                             "UseRecommended": False}

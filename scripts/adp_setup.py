@@ -85,8 +85,11 @@ ROLE = (
     "Never say or suggest that you did.\n"
     "Never ask for a password, PIN, OTP, token code or card number. "
     "If someone offers one, tell them not to share it.\n"
-    "Reply in the customer's language."
+    "Reply in English. Reply in Chinese only if the question itself is written in Chinese characters."
 )
+# How ADP may answer, in priority order: "doc" (the FAQ document) and "qa" (Q&A pairs).
+# "llm" (the model on its own) is left out on purpose; see configure_app.
+INTENTS = ("doc", "qa")
 GREETING = ("Hi, I'm Glass Vault Help. Ask me how the demo bank works: limits, approvals, payees "
             "or what the assistant can do.")
 # What ADP says when nothing in the knowledge base matches: with general knowledge off, it never improvises.
@@ -480,6 +483,10 @@ def configure_app(admin: AdpAdmin, app_id: str, model: Mapping[str, Any]) -> int
                    "AliasName": model.get("AliasName") or model["ModelName"]}
     # Off-topic questions get the fixed reply instead of the model's general knowledge.
     qa["Output"] = {**(qa.get("Output") or {}), "UseGeneralKnowledge": False, "BareAnswer": BARE_ANSWER}
+    # Answer from documents, then Q&A pairs, and never by the model alone ("llm"). With the list
+    # empty, ADP's router sent about a third of FAQ questions straight to the model, which then
+    # invented rules ("up to 30 days to approve"); measured live on 2026-10-12.
+    qa["IntentAchievements"] = [{"Name": name} for name in INTENTS]
     search = []
     for source in qa.get("Search") or []:
         source = dict(source)
