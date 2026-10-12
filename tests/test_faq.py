@@ -402,3 +402,10 @@ def test_references_are_capped():
 ])
 def test_questions_about_what_the_demo_does_not_model_get_that_answer(question):
     assert answer_offline(question).matched == "What doesn't this demo cover?"
+
+
+def test_leftovers_of_adp_citation_markers_are_tidied():
+    assert clean_answer("No real money moves. , ") == "No real money moves."
+    assert clean_answer("He counts as a new payee in this demo . A payment is held .") == \
+        "He counts as a new payee in this demo. A payment is held."
+    assert clean_answer("限制为单笔最高 S$10,000 。") == "限制为单笔最高 S$10,000。"
