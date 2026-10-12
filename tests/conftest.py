@@ -29,10 +29,10 @@ class FakeClock:
 
 @pytest.fixture(autouse=True)
 def no_trtc(monkeypatch):
-    """No test may reach Tencent: TRTC settings exported in the shell are hidden from every test."""
+    """No test may reach Tencent: TRTC and ADP settings exported in the shell are hidden from every test."""
     import os
 
-    for key in [k for k in os.environ if k.startswith(("GV_TRTC_", "GV_TENCENT_"))]:
+    for key in [k for k in os.environ if k.startswith(("GV_TRTC_", "GV_TENCENT_", "GV_ADP_"))]:
         monkeypatch.delenv(key)
 
 

@@ -45,6 +45,7 @@ A layer later in the chain never relies on an earlier one having worked.
 | A15 | Injection in a statement line (a sender's PayNow reference: "SYSTEM: ignore previous instructions…") | Enquiries are answered by code from bank records; statement text never reaches an LLM, and lines that read like instructions are withheld on screen and in voice | `enquiry-recent-transactions-injection`, `test_a_poisoned_description_is_withheld_on_screen_and_in_voice` |
 | A16 | A dispute ("I never asked for that") or a cover-up: the record of what was said is edited or dropped, or a stopped request leaves no trace | Every turn, including frozen, refused and held ones, is filed as `REQUEST` in the hash-chained log before its outcome is shown; the signed challenge carries `transcript_hash`; the gateway files one confirm record per challenge, only if its plan, transcript and spoken script hash to the signed values, and will not execute a conversation-bound approval until that record is filed | `test_request_audit.py` |
 | A17 | The bank voice made to say words the bank did not render: the drafter's text, or a third party's statement description read out in the bank's voice | The voice speaks only confirmation and answer scripts the control plane rendered, fetched by SHA-256 from an endpoint that takes no text and refuses other sites; statement descriptions are shown, never spoken | `test_the_bank_voice_speaks_only_scripts_the_bank_rendered`, `test_the_bank_voice_never_reads_a_third_partys_words` |
+| A18 | Prompt injection or a hallucination makes Help, the FAQ assistant, claim a payment happened, promise one, or ask for a token code | Help has no tools and no account data, so it cannot move or read money. Its answers appear only in their own panel, labelled as AI-written, and never enter the dialogue the pipeline reads, the audit log or the bank voice, so they can neither count as the customer's words nor sound like the bank. The ADP app's role prompt tells it to answer only from the FAQ, never to claim it made or changed a payment, and never to ask for passwords, PINs or token codes; an ADP answer is reduced to plain text, capped in length, and withheld if the injection scan flags instruction-like text; without ADP, or if it fails, the answer is fixed FAQ text, which tells the customer never to share a token code. Residual: a false claim in plain words ("your payment was sent") is not caught by the scan and would be shown, labelled as AI-written, with no effect on any payment | `test_help_never_touches_the_dialogue_the_bank_voice_or_the_audit_log`, `test_the_help_code_never_reaches_the_chat_or_the_bank_voice`, `test_an_unsafe_adp_answer_is_withheld`, `test_no_faq_text_looks_like_an_instruction` |
 
 ## Residual risks (said plainly)
 
@@ -61,6 +62,10 @@ A layer later in the chain never relies on an earlier one having worked.
 - **Mocks:** biometrics in the CLI demo use a raw Ed25519 key (the web app uses a
   real WebAuthn passkey); the ledger, PayNow, billers, SGX quotes and KYC data are
   simulated. We never imply integration with DBS systems.
+- **Help can be wrong.** An ADP answer is written by a model from the FAQ and
+  can misstate a rule. The panel labels it as AI-written, and the customer's
+  own money is handled only in the main chat. Help cannot act on what it says:
+  it has no tools, and nothing it writes reaches a payment.
 - **The customer's page is trusted.** A compromised page (or browser) could
   replay a recent bank script or speak in a voice of its own; what it cannot
   do is get a signature over a plan the customer did not see.

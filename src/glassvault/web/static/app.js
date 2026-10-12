@@ -259,6 +259,26 @@ function renderVoice(voice) {
   $("#tts-host").textContent = trtcSpeak ? [speak.host, speak.region].filter(Boolean).join(" · ") : "on this device";
 }
 
+// The Help service panel: a Tencent ADP agent app answers general questions from the bank's
+// FAQ; without an ADP app key, the built-in FAQ does. The Help sheet's notice says which of the
+// two the customer is reading: AI-written answers, or the FAQ's own words.
+function renderFaq(faq) {
+  const adp = faq?.engine === "adp";
+  $("#help-notice").textContent = adp
+    ? "Answers are written by AI (Tencent ADP) from the bank's FAQ. Help can't see your accounts or move money."
+    : "Answers come word for word from the bank's FAQ. Help can't see your accounts or move money.";
+  const status = $("#faq-status");
+  status.textContent = adp ? "Tencent ADP" : "Built-in FAQ";
+  status.className = `pill ${adp ? "ok" : ""}`;
+  $("#faq-note").hidden = adp;
+  $("#faq-name").textContent = adp ? faq.name || "Tencent ADP" : "Built-in FAQ";
+  $("#faq-host").textContent = adp ? faq.host || "" : "fixed answers from faq.md, matched by keyword";
+  $("#faq-sub").textContent = adp
+    ? "General questions go to a Tencent ADP agent app over this FAQ. It has no tools and no account access; " +
+      "its answers never enter the payment conversation or the bank voice."
+    : "No tools and no account access; its answers never enter the payment conversation or the bank voice.";
+}
+
 // One line of live activity on a voice card ("asr" or "tts"): what it is doing now, or did last.
 function voiceActivity(card, mode, text) {
   const line = $(`#${card}-activity`);
@@ -279,6 +299,7 @@ function renderState(s) {
   }
   renderLLM(s.llm);
   renderVoice(s.voice);
+  renderFaq(s.faq);
   $("#passkey-btn").textContent = s.passkey.registered ? "Face ID ready" : "Set up Face ID";
   $("#passkey-btn").classList.toggle("ok", s.passkey.registered);
   $("#rogue-toggle").checked = Boolean(s.rogue);
@@ -811,6 +832,141 @@ async function runAttack(a) {
 }
 
 // ---------------------------------------------------------------------------
+// Help: the bank FAQ assistant, in a sheet of its own. It answers general questions from the
+// bank's FAQ, through a Tencent ADP app when one is set up and from the built-in FAQ otherwise.
+// It stands apart from the payment conversation: its messages go only to the sheet, never to
+// the chat, and the bank voice never reads them, since an ADP answer is written by a model and
+// the bank voice speaks only scripts the bank rendered. The server keeps them out of the
+// dialogue and the audit log in the same way.
+
+const helpLayer = $("#help-layer");
+const helpButton = $("#help-btn");
+const helpLog = $("#help-log");
+const helpInput = $("#help-input");
+const helpSend = $("#help-send");
+let helpBusy = false;
+let helpRound = 0; // bumped by a reset, so an answer to a question from before it is dropped
+
+function addHelpMsg(cls, text) {
+  const node = el("div", `msg ${cls}`, text);
+  helpLog.appendChild(node);
+  helpLog.scrollTop = helpLog.scrollHeight;
+  return node;
+}
+
+// Where an answer came from. A note comes first: an ADP answer with one is the fixed text the
+// server put in place of what ADP wrote, so it is not labelled as AI-written.
+function helpSource(answer) {
+  if (answer.source === "adp") return answer.note ? "Tencent ADP · answer withheld" : "Tencent ADP · written by AI";
+  return answer.matched ? `Built-in FAQ · ${answer.matched}` : "Built-in FAQ";
+}
+
+// Plain text only (el() sets textContent), with where it came from: an ADP answer says it is
+// AI-written (or withheld), a built-in one names the FAQ entry it is.
+function renderHelpAnswer(answer) {
+  const node = addHelpMsg("help", answer.text);
+  node.appendChild(el("div", "help-source", helpSource(answer)));
+  if (answer.references?.length) node.appendChild(el("div", "help-meta", `Sources: ${answer.references.join(", ")}`));
+  if (answer.note) node.appendChild(el("div", "help-meta", answer.note));
+  helpLog.scrollTop = helpLog.scrollHeight;
+}
+
+// One line of live activity on the Help service card.
+function helpActivity(mode, text) {
+  const line = $("#faq-activity");
+  line.className = `voice-activity ${mode}`;
+  line.textContent = text;
+}
+
+async function askHelp(text) {
+  text = text.trim();
+  if (!text || helpBusy) return;
+  const round = helpRound;
+  helpBusy = true;
+  helpSend.disabled = true;
+  addHelpMsg("customer", text);
+  helpInput.value = "";
+  const typing = addHelpMsg("agent typing", "Looking it up…");
+  helpActivity("live", state?.faq?.engine === "adp" ? "Asking Tencent ADP…" : "Searching the built-in FAQ…");
+  try {
+    const { answer, faq } = await api("/api/faq", { text });
+    if (round !== helpRound) return;
+    typing.remove();
+    renderHelpAnswer(answer);
+    if (state) state.faq = faq;
+    renderFaq(faq);
+    const cited = answer.references?.length ? ` from ${answer.references.join(", ")}` : "";
+    if (answer.note) helpActivity("error", answer.note); // ADP's answer withheld, or ADP failed and the built-in FAQ answered
+    else if (answer.source === "adp") helpActivity("done", `Tencent ADP answered${cited}`);
+    else helpActivity("done", answer.matched ? `Built-in FAQ answered: ${answer.matched}` : "No FAQ entry matched");
+  } catch (err) {
+    if (round !== helpRound) return;
+    typing.remove();
+    addHelpMsg("refused", `Help couldn't answer: ${err.message || "something went wrong"}`);
+    helpActivity("error", `Failed: ${err.code || err.message}`);
+  } finally {
+    // Only this round's question holds the lock: one from before a reset finishing late must not
+    // unlock a question asked since.
+    if (round === helpRound) {
+      helpBusy = false;
+      helpSend.disabled = false;
+    }
+  }
+}
+
+const helpIsOpen = () => helpLayer.classList.contains("open");
+// Everything else on the phone's screen: inert while the sheet is open, so nothing behind it takes focus or clicks.
+const underHelp = () => [...helpLayer.parentElement.children].filter((node) => node !== helpLayer);
+
+function openHelp() {
+  if (helpIsOpen()) return;
+  helpLayer.classList.add("open");
+  helpButton.setAttribute("aria-expanded", "true");
+  for (const node of underHelp()) node.inert = true;
+  helpInput.focus({ preventScroll: true }); // no scrolling the phone's screen to the sheet as it slides in
+}
+
+function closeHelp() {
+  if (!helpIsOpen()) return;
+  helpLayer.classList.remove("open");
+  helpButton.setAttribute("aria-expanded", "false");
+  for (const node of underHelp()) node.inert = false;
+  helpButton.focus({ preventScroll: true });
+}
+
+// A new demo is a new Help conversation (the server starts a new ADP one): only the suggestions stay.
+// A question still in flight is dropped with it, so it no longer holds the lock on asking.
+function resetHelp() {
+  helpRound += 1;
+  helpBusy = false;
+  helpSend.disabled = false;
+  helpLog.querySelectorAll(".msg").forEach((m) => m.remove());
+  helpActivity("idle", "Idle");
+}
+
+function setupHelp() {
+  helpButton.addEventListener("click", openHelp);
+  $("#help-close").addEventListener("click", closeHelp);
+  $("#help-scrim").addEventListener("click", closeHelp);
+  // Escape closes the sheet only when the key is meant for Help (focus in the sheet, or on its
+  // chip), not from the console beside the phone, and not while an input method is composing
+  // text, where Escape cancels the composition (Safari reports that key as keyCode 229).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !helpIsOpen() || e.isComposing || e.keyCode === 229) return;
+    if (!helpLayer.contains(e.target) && e.target !== helpButton) return;
+    e.preventDefault();
+    closeHelp();
+  });
+  $("#help-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    askHelp(helpInput.value);
+  });
+  $("#help-suggest").addEventListener("click", (e) => {
+    if (e.target.matches(".suggest")) askHelp(e.target.textContent);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Wiring
 
 $("#composer").addEventListener("submit", (e) => {
@@ -834,6 +990,7 @@ $("#reset").addEventListener("click", async () => {
   renderStages([]);
   renderDiff(null);
   $("#attack-log").innerHTML = "";
+  resetHelp();
   refreshAudit();
 });
 
@@ -841,6 +998,7 @@ $("#reset").addEventListener("click", async () => {
   tickClock();
   setInterval(tickClock, 10_000);
   setupMic();
+  setupHelp();
   if ("speechSynthesis" in window) speechSynthesis.getVoices();
   renderState(await api("/api/state"));
   renderStages([]);
