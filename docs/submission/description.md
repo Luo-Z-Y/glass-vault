@@ -48,18 +48,19 @@ DBS capabilities:
 - Zero-trust gateway: re-derives each recipient's name from bank records, re-simulates against live balances, re-runs the risk rules, executes its own stored copy once, and refuses anything unsigned, replayed, expired or changed by one cent.
 - Injection shielding: the customer's words are scanned for instructions aimed at the AI and for hidden or look-alike characters. Bill references reach the model only as placeholders; payee names are sanitised, and replaced too if they read like instructions. Third-party statement text never reaches an LLM or the bank voice.
 - KYC, risk, velocity: payments to others and share buys are refused until KYC is verified; limits follow the KYC tier. New payees: 12-hour cooling-off and S$1,000 for the first 7 days. 5+ payments to others in 10 minutes are paused. S$5,000+ leaving the accounts, or over 10x the largest past payment to that payee, needs an out-of-band token code for that one approval (simulated; 3 wrong codes void it).
+- Help, kept out of the money path: a bank FAQ assistant on Tencent ADP (knowledge-base Q&A over the bank's FAQ, with the FAQ itself as a no-model fallback). It has no tools and no account data; its answers appear in their own panel labelled as AI-written and never enter the payment dialogue, the audit log or the bank voice.
 - Audit: a SHA-256 hash-chained log of every turn (transcript with voice/text flag, the drafter's output, the validator's reading once a draft passes provenance, the diff, every check), challenge, signature and execution. A conversation-bound approval cannot execute until that exact conversation, plan and spoken script are on file. The demo stores transcripts, not audio.
 
 How prompts drive the AI: prompts produce structure, through tool schemas (submit_plan, ask_clarification, answer_enquiry), forced tool calls for the drafter, temperature 0 and one repair round. The drafter must quote the customer's words as evidence for each field they stated; a provenance check finds each quote in the transcript or freezes the plan. The validator has its own audit-procedure prompt. Confirmations, answers, outcome messages and all speech come from code templates; the only model wording a customer can see is a short clarifying question, on screen only.
 
-Stack: Python 3.12, FastAPI, Pydantic v2, WebAuthn; DeepSeek drafter; Tencent Hunyuan Hy3 validator (via OpenRouter, pinned to Tencent's endpoint); TRTC FlowTTS and sentence recognition. Built with Claude Code and WorkBuddy, which acted as an independent QA tester and wrote our two held-out test sets without seeing our prompts or code.
+Stack: Python 3.12, FastAPI, Pydantic v2, WebAuthn; DeepSeek drafter; Tencent Hunyuan Hy3 validator (via OpenRouter, pinned to Tencent's endpoint); TRTC FlowTTS and sentence recognition; Tencent ADP (Help). Built with Claude Code and WorkBuddy, which acted as an independent QA tester and wrote our two held-out test sets without seeing our prompts or code.
 
 4. BUSINESS VALUE
 
 A careless simulated customer approves every confirmation, so safety must come from the system.
 - 90 development cases: 0 unsafe executions, 12 of 12 rogue attacks frozen, 89 of 90 fully correct (the miss: a false freeze, safe but friction), 21 of 21 needed questions asked and none unneeded, about 2.1 s per turn. Naive agent on the 84 non-enquiry cases: 36 unsafe, S$145,146.41.
 - 40 held-out cases by WorkBuddy, each set run once untuned, then its gaps became general rules. First runs: 0 and 1 unsafe (a S$481.44 share buy from the wrong default account). Current build: 0 unsafe, 33 of 40 fully correct, every miss a clarifying question (naive: 7 unsafe, S$13,336.44).
-- 1,197 automated tests; 17 attacks mapped to the layer that stops each.
+- 1,307 automated tests; 18 attacks mapped to the layer that stops each.
 
 Impact: a transfer then a share buy takes one sentence and one approval (42 of 43 routine requests in one touch). Against fraud: cooling-off, holds, step-up and refusing scripts aimed at the AI; a customer being actively coached remains the hardest case.
 
