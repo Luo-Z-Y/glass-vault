@@ -770,6 +770,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   -webkit-mask: var(--icon-faceid) center / contain no-repeat;
   mask: var(--icon-faceid) center / contain no-repeat;
 }
+.approve-label { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.approve-label small { font-size: 12px; font-weight: 600; opacity: 0.85; }
 .primary:hover:not(:disabled) { background: var(--red-press); }
 .primary:active:not(:disabled) { transform: scale(0.98); }
 .confirm-actions .ghost { flex: 1; padding: 10px 12px; border-color: transparent; background: var(--fill); }
