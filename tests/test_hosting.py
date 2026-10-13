@@ -178,7 +178,7 @@ def test_bodies_over_4_mb_and_writes_from_other_sites_are_refused(server):
 
 def test_over_https_the_visitor_cookie_is_a_host_only_secure_cookie(server, monkeypatch):
     monkeypatch.setattr(server, "SESSIONS", True)
-    monkeypatch.setattr(server, "ORIGIN", "https://119-28-111-192.sslip.io")
+    monkeypatch.setattr(server, "ORIGIN", "https://glassvault.luo-zy.com")
     monkeypatch.setattr(server, "VISITOR_COOKIE", "__Host-gv_visitor")
     with TestClient(server.app) as client:
         cookie = client.get("/").headers["set-cookie"]

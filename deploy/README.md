@@ -1,12 +1,12 @@
 # Hosting the demo
 
 How the live demo for judges runs: on the Tencent Cloud Lighthouse server that already hosts
-FirstRoll (Singapore, 2 vCPU, 2 GB), at `https://119-28-111-192.sslip.io`, behind a password.
+FirstRoll (Singapore, 2 vCPU, 2 GB), at `https://glassvault.luo-zy.com`, behind a password.
 
 ```
 judge's browser ──HTTPS──> FirstRoll's Caddy (ports 80/443, Let's Encrypt)
                               ├─ firstroll.app, api.firstroll.app ──> FirstRoll
-                              └─ 119-28-111-192.sslip.io ──> glassvault:8000 (this container)
+                              └─ glassvault.luo-zy.com ──> glassvault:8000 (this container)
 ```
 
 | File | Purpose |
@@ -47,11 +47,12 @@ the hourly cap:
   root account's, and set a budget alert in Billing. Anyone who can run Docker on the server,
   FirstRoll's deploy account included, can read these keys with `docker inspect`.
 
-The demo's passkeys need HTTPS and a domain name, which is why it is served by name (sslip.io
-turns `119-28-111-192.sslip.io` into `119.28.111.192`; nothing to register) and not by IP.
-Push-to-talk also needs HTTPS. If Let's Encrypt ever refuses sslip.io names (they share one
-rate limit), `119-28-111-192.nip.io` works the same way: change the host in FirstRoll's
-Caddyfile and rerun `--init` with `GLASSVAULT_HOST` set.
+The demo's passkeys need HTTPS and a domain name, and push-to-talk needs HTTPS, so it is served
+by name, not by IP: `glassvault.luo-zy.com`, an A record at Spaceship pointing at the server. A
+real domain rather than an sslip.io name, because corporate networks often block those "dynamic
+DNS" hosts. Without a domain of your own, `deploy.sh --init` falls back to `<ip>.sslip.io`.
+Changing the host means changing it in FirstRoll's Caddyfile (a FirstRoll release) and rerunning
+`--init` with `GLASSVAULT_HOST` set, then restarting the container.
 
 ## First time
 
@@ -61,7 +62,8 @@ Caddyfile and rerun `--init` with `GLASSVAULT_HOST` set.
 2. **The server's settings.** With the admin login (it needs sudo):
 
    ```bash
-   SSH_OPTS="-i ~/.ssh/firstroll-admin.pem" deploy/deploy.sh ubuntu@119.28.111.192 --init
+   GLASSVAULT_HOST=glassvault.luo-zy.com SSH_OPTS="-i ~/.ssh/firstroll-admin.pem" \
+     deploy/deploy.sh ubuntu@119.28.111.192 --init
    ```
 
    This copies your `.env` (the API keys) to `/opt/glassvault/.env` (root, mode 0600) and adds

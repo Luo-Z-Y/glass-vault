@@ -194,8 +194,8 @@ MAX_SESSIONS = int(os.environ.get("GV_MAX_SESSIONS") or "16")  # the least recen
 PAID_CALLS_PER_HOUR = int(os.environ.get("GV_PAID_CALLS_PER_HOUR") or "0")  # 0: no cap
 MAX_BODY = 4 * 1024 * 1024
 MAX_AUDIT = 2000  # a demo whose audit log is this long takes no more requests until it is reset
-# Over HTTPS the cookie is a __Host- cookie, which only this host can set: other *.sslip.io sites
-# could otherwise plant a visitor id (sslip.io is not a public suffix).
+# Over HTTPS the cookie is a __Host- cookie, which only this host can set: a sibling subdomain (or,
+# on an sslip.io name, anyone's, since sslip.io is not a public suffix) could otherwise plant one.
 VISITOR_COOKIE = "__Host-gv_visitor" if ORIGIN.startswith("https://") else "gv_visitor"
 VISITOR_ID = re.compile(r"[A-Za-z0-9_-]{22,64}")
 
