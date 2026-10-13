@@ -142,11 +142,23 @@ def _dotenv_has_key() -> bool:
                                 for line in env.read_text().splitlines())
 
 
-def new_demo() -> Demo:
+# Passkey user handles are derived from the visitor id (a 192-bit secret the server made), so
+# they stay the same across Reset, eviction and redeploys for as long as the visitor's cookie
+# lasts: setting up Face ID again replaces the passkey on the visitor's phone instead of saving
+# another. Hashed with a label, so a handle says nothing about the visitor id. The shared demo
+# (no visitor id) uses one fixed handle, so Reset replaces the passkey on a local run too.
+def _passkey_handles(visitor: str | None):
+    seed = "shared" if visitor is None else visitor
+    return lambda customer: hashlib.sha256(f"glass-vault passkey handle\0{seed}\0{customer}".encode()).digest()
+
+
+def new_demo(visitor: str | None = None) -> Demo:
+    """A fresh demo bank; ``visitor`` (with GV_SESSIONS) keeps its passkey handle stable."""
     clock = lambda: datetime.now(UTC)  # noqa: E731
     bank = seed_bank(clock().date())
     audit = AuditLog()
-    webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock)
+    webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock,
+                                user_handle=_passkey_handles(visitor))
     verifier = DemoVerifier(webauthn, DeviceKeyVerifier())
     token, step_up = DigitalToken(), StepUpVerifier()
     step_up.enrol(bank.customer_id, token)
@@ -219,11 +231,11 @@ def current() -> Demo:
     if visitor is None:
         return demo
     if _fresh.get():
-        return new_demo()
+        return new_demo(visitor)
     with _sessions_lock:
         d = _sessions.get(visitor)
         if d is None:
-            d = _sessions[visitor] = new_demo()
+            d = _sessions[visitor] = new_demo(visitor)
             while len(_sessions) > MAX_SESSIONS:
                 _sessions.popitem(last=False)
         _sessions.move_to_end(visitor)
@@ -238,9 +250,9 @@ def replace_demo() -> Demo:
         demo = new_demo()
         return demo
     if _fresh.get():
-        return new_demo()
+        return new_demo(visitor)
     with _sessions_lock:
-        d = _sessions[visitor] = new_demo()
+        d = _sessions[visitor] = new_demo(visitor)
         _sessions.move_to_end(visitor)
         while len(_sessions) > MAX_SESSIONS:
             _sessions.popitem(last=False)
@@ -328,7 +340,8 @@ def state_json(d: Demo) -> dict[str, Any]:
                 "drafter": llm_json(d.drafter), "validator": llm_json(d.validator)},
         "rogue": d.rogue,
         "passkey": {"registered": d.verifier.has_passkey(customer),
-                    "simulated_allowed": not d.verifier.has_passkey(customer)},
+                    "simulated_allowed": not d.verifier.has_passkey(customer),
+                    "rp_id": RP_ID},  # passkeys work only on this host (or its subdomains)
         "attacks": {"blocked": d.blocked, "funds_moved": str(d.funds_moved)},
         "voice": voice_json(d),
         "faq": faq_json(d),
@@ -674,11 +687,38 @@ class RegisterRequest(BaseModel):
 @app.post("/api/passkey/register/verify")
 def passkey_verify(req: RegisterRequest):
     d = current()
+    if d.verifier.has_passkey(d.bank.customer_id):
+        # Set up meanwhile, in another tab of this demo: say so plainly rather than as a rejection.
+        return JSONResponse({"code": "DEVICE_ALREADY_REGISTERED", "status": 409,
+                             "message": "a passkey is already enrolled; reset the demo to enrol again"}, 409)
     try:
         d.verifier.webauthn.verify_registration(d.bank.customer_id, req.credential)
     except Exception as e:  # EnrolmentError and friends
         return JSONResponse({"code": "ENROLMENT_REJECTED", "status": 400, "message": str(e)[:200]}, 400)
     return {"state": state_json(d)}
+
+
+class ApprovalOptionsRequest(BaseModel):
+    nonce: str
+
+
+@app.post("/api/passkey/approval-options")
+def passkey_approval_options(req: ApprovalOptionsRequest):
+    """WebAuthn options for a confirmation shown before the passkey was enrolled.
+
+    The confirmation came without them (there was no passkey to ask), so a device that sets up
+    Face ID from the confirmation itself fetches them here. They hold nothing the customer could
+    not compute: the challenge digest and the customer's own credential ids."""
+    d = current()
+    challenge = d.challenges.get(req.nonce)
+    if challenge is None:
+        return JSONResponse({"code": "UNKNOWN_CHALLENGE", "status": 404,
+                             "message": "no pending challenge has this nonce"}, 404)
+    if not d.verifier.has_passkey(d.bank.customer_id):
+        return JSONResponse({"code": "NO_PASSKEY", "status": 409,
+                             "message": "set up Face ID before asking it to sign"}, 409)
+    return {"webauthn": d.verifier.webauthn.authentication_options(
+        d.bank.customer_id, challenge_digest(challenge))}
 
 
 # --- "Try to rob this bank": direct attacks on the gateway -----------------------------------

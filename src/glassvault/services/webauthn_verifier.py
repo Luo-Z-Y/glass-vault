@@ -149,7 +149,11 @@ class WebAuthnVerifier:
         rp_name: str = "Glass Vault",
         audit: AuditLog | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        user_handle: Callable[[str], bytes] | None = None,
     ):
+        """``user_handle`` derives each customer's user handle; by default it is random. A caller
+        that keeps it stable across verifiers makes a device replace its earlier passkey when the
+        customer enrols again, instead of saving another one."""
         self.rp_id = rp_id
         self.origins: tuple[str, ...] = (origin,) if isinstance(origin, str) else tuple(origin)
         if not self.origins:
@@ -157,6 +161,7 @@ class WebAuthnVerifier:
         self.rp_name = rp_name
         self._audit = audit
         self._clock = clock
+        self._new_handle = user_handle or (lambda _customer: secrets.token_bytes(32))
         self._user_handles: dict[str, bytes] = {}
         self._credentials: dict[str, dict[bytes, Passkey]] = {}
         self._owners: dict[bytes, str] = {}
@@ -172,8 +177,11 @@ class WebAuthnVerifier:
         self, customer_id: str, *, user_name: str, display_name: str | None = None
     ) -> dict[str, Any]:
         """``navigator.credentials.create()`` options; starts one registration attempt."""
-        # A random, stable user handle: the customer id itself never goes to the authenticator.
-        handle = self._user_handles.setdefault(customer_id, secrets.token_bytes(32))
+        # An opaque user handle, the same for every attempt: the customer id never goes to the
+        # authenticator.
+        if customer_id not in self._user_handles:
+            self._user_handles[customer_id] = self._new_handle(customer_id)
+        handle = self._user_handles[customer_id]
         options = generate_registration_options(
             rp_id=self.rp_id,
             rp_name=self.rp_name,

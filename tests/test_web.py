@@ -73,3 +73,45 @@ def test_the_voice_panel_names_the_trtc_services_or_the_browser(monkeypatch, tmp
                              "region": "ap-singapore", "voice": "Articulate Narrator"}
     assert trtc["listen"] == {"engine": "trtc", "name": demo.asr.name, "host": "asr-intl.cloud-rtc.com",
                               "model": "bigmodel", "language": "en"}
+
+
+def test_face_id_set_up_from_a_confirmation_can_sign_that_confirmation(monkeypatch, tmp_path):
+    """A phone sets up Face ID from the confirmation card, then signs the payment on that card.
+
+    The card was rendered before the passkey existed, so it came without WebAuthn options; the
+    page fetches them once Face ID is set up. From then on the simulated key approves nothing."""
+    from test_webauthn import SoftAuthenticator
+    from webauthn.helpers import bytes_to_base64url
+
+    monkeypatch.delenv("GV_LLM_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    server = importlib.import_module("glassvault.web.server")
+    monkeypatch.setattr(server, "demo", server.new_demo())
+    phone = SoftAuthenticator()
+    site = {"origin": server.ORIGIN, "rp_id": server.RP_ID}
+
+    with TestClient(server.app) as client:
+        outcome = client.post("/api/message", json={"text": "Send mum 300 for groceries"}).json()["outcome"]
+        assert outcome["kind"] == "confirm" and "webauthn" not in outcome
+        nonce = outcome["challenge"]["nonce"]
+        assert client.post("/api/passkey/approval-options", json={"nonce": nonce}).json()["code"] == "NO_PASSKEY"
+
+        options = client.post("/api/passkey/register/options", json={}).json()
+        state = client.post("/api/passkey/register/verify",
+                            json={"credential": phone.create(options, **site)}).json()["state"]
+        assert state["passkey"] == {"registered": True, "simulated_allowed": False, "rp_id": server.RP_ID}
+        # Another tab's late setup is told the passkey exists, not that its own was rejected.
+        late = client.post("/api/passkey/register/verify", json={"credential": SoftAuthenticator().create(options, **site)})
+        assert late.status_code == 409 and late.json()["code"] == "DEVICE_ALREADY_REGISTERED"
+
+        unknown = client.post("/api/passkey/approval-options", json={"nonce": "no-such-nonce"})
+        assert unknown.status_code == 404 and unknown.json()["code"] == "UNKNOWN_CHALLENGE"
+        webauthn = client.post("/api/passkey/approval-options", json={"nonce": nonce}).json()["webauthn"]
+        assert [c["id"] for c in webauthn["allowCredentials"]] == [bytes_to_base64url(phone.credential_id)]
+        approved = client.post("/api/approve", json={"nonce": nonce, "assertion": phone.get(webauthn, **site)})
+        assert approved.status_code == 200 and approved.json()["receipts"]
+
+        later = client.post("/api/message", json={"text": "Send mum 50 for lunch"}).json()["outcome"]
+        assert later["kind"] == "confirm" and "webauthn" in later
+        simulated = client.post("/api/approve", json={"nonce": later["challenge"]["nonce"], "simulated": True})
+        assert simulated.status_code == 401 and simulated.json()["code"] == "SIGNATURE_REQUIRED"
