@@ -22,6 +22,7 @@ demo of their own and cap its paid calls per hour: see "Hosting" below.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -142,11 +143,26 @@ def _dotenv_has_key() -> bool:
                                 for line in env.read_text().splitlines())
 
 
-def new_demo() -> Demo:
+# Passkey user handles are derived from the visitor id, so they stay the same across Reset and
+# eviction for as long as the visitor's cookie (and this process) lasts: setting up Face ID again
+# replaces the passkey on the visitor's phone instead of saving another one. Keyed, so a handle
+# says nothing about the visitor id. The shared demo (no visitor id) keeps random handles.
+_HANDLE_KEY = secrets.token_bytes(32)
+
+
+def _passkey_handles(visitor: str | None):
+    if visitor is None:
+        return None
+    return lambda customer: hmac.new(_HANDLE_KEY, f"{visitor}\0{customer}".encode(), hashlib.sha256).digest()
+
+
+def new_demo(visitor: str | None = None) -> Demo:
+    """A fresh demo bank; ``visitor`` (with GV_SESSIONS) keeps its passkey handle stable."""
     clock = lambda: datetime.now(UTC)  # noqa: E731
     bank = seed_bank(clock().date())
     audit = AuditLog()
-    webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock)
+    webauthn = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock,
+                                user_handle=_passkey_handles(visitor))
     verifier = DemoVerifier(webauthn, DeviceKeyVerifier())
     token, step_up = DigitalToken(), StepUpVerifier()
     step_up.enrol(bank.customer_id, token)
@@ -219,11 +235,11 @@ def current() -> Demo:
     if visitor is None:
         return demo
     if _fresh.get():
-        return new_demo()
+        return new_demo(visitor)
     with _sessions_lock:
         d = _sessions.get(visitor)
         if d is None:
-            d = _sessions[visitor] = new_demo()
+            d = _sessions[visitor] = new_demo(visitor)
             while len(_sessions) > MAX_SESSIONS:
                 _sessions.popitem(last=False)
         _sessions.move_to_end(visitor)
@@ -238,9 +254,9 @@ def replace_demo() -> Demo:
         demo = new_demo()
         return demo
     if _fresh.get():
-        return new_demo()
+        return new_demo(visitor)
     with _sessions_lock:
-        d = _sessions[visitor] = new_demo()
+        d = _sessions[visitor] = new_demo(visitor)
         _sessions.move_to_end(visitor)
         while len(_sessions) > MAX_SESSIONS:
             _sessions.popitem(last=False)
@@ -328,7 +344,8 @@ def state_json(d: Demo) -> dict[str, Any]:
                 "drafter": llm_json(d.drafter), "validator": llm_json(d.validator)},
         "rogue": d.rogue,
         "passkey": {"registered": d.verifier.has_passkey(customer),
-                    "simulated_allowed": not d.verifier.has_passkey(customer)},
+                    "simulated_allowed": not d.verifier.has_passkey(customer),
+                    "rp_id": RP_ID},  # passkeys work only on this host (or its subdomains)
         "attacks": {"blocked": d.blocked, "funds_moved": str(d.funds_moved)},
         "voice": voice_json(d),
         "faq": faq_json(d),

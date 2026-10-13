@@ -199,6 +199,17 @@ def test_user_handle_is_stable_per_customer(verifier):
     assert first == second != other
 
 
+def test_a_caller_can_keep_the_user_handle_across_verifiers(audit, clock):
+    """The web demo derives it per visitor: enrolling again after a reset replaces the passkey on
+    the device instead of saving a second one."""
+    derive = lambda customer: hashlib.sha256(b"visitor 1|" + customer.encode()).digest()  # noqa: E731
+    before = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock, user_handle=derive)
+    after = WebAuthnVerifier(rp_id=RP_ID, origin=ORIGIN, audit=audit, clock=clock, user_handle=derive)
+    first = before.registration_options(CUSTOMER, user_name=CUSTOMER)["user"]["id"]
+    assert after.registration_options(CUSTOMER, user_name=CUSTOMER)["user"]["id"] == first
+    assert base64url_to_bytes(first) == derive(CUSTOMER)
+
+
 def test_enrolment_without_user_verification_is_refused(verifier, audit):
     options = verifier.registration_options(CUSTOMER, user_name=CUSTOMER)
     with pytest.raises(EnrolmentError, match="rejected"):

@@ -202,3 +202,16 @@ def test_only_the_newest_audio_is_kept(server):
             key = client.post("/api/message", json={"text": f"Send mum {amount} for lunch"}).json()["outcome"]["speech"]
             assert client.get(f"/api/voice/{key}").status_code == 200
     assert len(server.demo.audio) == server.MAX_AUDIO and set(server.demo.audio) <= set(server.demo.scripts)
+
+
+def test_a_visitors_passkey_handle_survives_reset_but_differs_between_visitors(server, monkeypatch):
+    """Setting up Face ID again after Reset replaces the passkey on the visitor's phone (same user
+    handle) rather than saving another; two visitors never share a handle."""
+    monkeypatch.setattr(server, "SESSIONS", True)
+    handle = lambda c: c.post("/api/passkey/register/options", json={}).json()["user"]["id"]  # noqa: E731
+    with TestClient(server.app) as a, TestClient(server.app) as b:
+        a.get("/")
+        b.get("/")
+        first = handle(a)
+        a.post("/api/reset", json={})
+        assert handle(a) == first != handle(b)

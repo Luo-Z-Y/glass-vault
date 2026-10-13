@@ -503,7 +503,9 @@ money moving before the audit write, and unaudited non-gateway errors.
   `DeviceKey`s. The web demo enrols its first passkey without an enrolment
   code. On a device with Face ID, Touch ID or Windows Hello the first
   confirmation enrols one; elsewhere, or if enrolment is cancelled, it signs
-  with a labelled simulated key until one is enrolled.
+  with a labelled simulated key until one is enrolled. Hosted, each visitor's
+  passkey user handle is derived from their visitor id, so enrolling again after
+  Reset replaces the passkey on their device rather than adding another.
 - The step-up digital token is simulated: its secret lives in the gateway
   process, and the web demo shows the code at `/api/token/{nonce}`. The gateway
   service does not enrol a token, so it does not enforce step-up.

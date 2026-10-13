@@ -99,7 +99,7 @@ def test_face_id_set_up_from_a_confirmation_can_sign_that_confirmation(monkeypat
         options = client.post("/api/passkey/register/options", json={}).json()
         state = client.post("/api/passkey/register/verify",
                             json={"credential": phone.create(options, **site)}).json()["state"]
-        assert state["passkey"] == {"registered": True, "simulated_allowed": False}
+        assert state["passkey"] == {"registered": True, "simulated_allowed": False, "rp_id": server.RP_ID}
 
         unknown = client.post("/api/passkey/approval-options", json={"nonce": "no-such-nonce"})
         assert unknown.status_code == 404 and unknown.json()["code"] == "UNKNOWN_CHALLENGE"
