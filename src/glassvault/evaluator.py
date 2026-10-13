@@ -74,6 +74,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
     Raises EvaluationError if a step names something unknown or cannot be paid for.
     """
     balances = {a.id: a.balance for a in view.accounts.values()}
+    names = {a.id: a.name for a in view.accounts.values()}
     cash_by_step: dict[str, Decimal] = {}
     resolved: list[ResolvedStep] = []
 
@@ -85,7 +86,7 @@ def resolve(plan: Plan, view: BankView, *, now: datetime) -> ResolvedPlan:
         if balances[account_id] < amount:
             short = amount - balances[account_id]
             raise EvaluationError(
-                "INSUFFICIENT_FUNDS", f"{account_id} is short by S${short:,.2f}", step_id
+                "INSUFFICIENT_FUNDS", f"the {names[account_id]} is short by S${short:,.2f}", step_id
             )
         balances[account_id] -= amount
 
