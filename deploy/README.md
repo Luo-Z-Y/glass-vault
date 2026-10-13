@@ -28,7 +28,11 @@ your credit. So the hosted server turns on settings the local demo leaves off
 (`src/glassvault/web/server.py`, "Hosting"):
 
 - **A password** (`GV_ACCESS_PASSWORD`): every request needs it, as HTTP basic auth with the user
-  name `judge`. Put both in the submission's project-link notes.
+  name `judge`. Both end the submission's Project Description (`docs/submission/description.md`),
+  so they are as public as the submission and this repository: the password keeps out bots and
+  passers-by, not a determined visitor, and the cap below and the provider limits bound what one
+  could spend. To change it after judging, delete `GV_ACCESS_PASSWORD` from your local `.env`,
+  then rerun `--init` and deploy.
 - **A demo per visitor** (`GV_SESSIONS=1`): each browser gets its own bank, conversation, rogue
   switch and passkey, so judges trying it at the same time never see each other's actions. The 16
   most recently used demos are kept; requests without the visitor cookie never displace one.
