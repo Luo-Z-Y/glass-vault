@@ -36,6 +36,18 @@ def no_trtc(monkeypatch):
         monkeypatch.delenv(key)
 
 
+@pytest.fixture(autouse=True)
+def restore_environment():
+    """No test may leak environment variables into the next: the evals CLI loads .env into os.environ,
+    which would hand later tests the developer's keys and the hosted demo's password."""
+    import os
+
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
 @pytest.fixture
 def clock() -> FakeClock:
     """Starts at a fixed moment, so the seed bank's dates and every expiry are the same on each run."""

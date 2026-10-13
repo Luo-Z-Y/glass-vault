@@ -104,7 +104,7 @@ for _ in $(seq 60); do
 done
 if [ "$code" != 200 ]; then
   echo "https://$host/healthz answered $code. Is FirstRoll released with the Glass Vault site block, and" >&2
-  echo "has its certificate been issued? ssh $dest 'sudo docker logs firstroll-caddy-1 2>&1 | grep -i sslip | tail'" >&2
+  echo "has its certificate been issued? ssh $dest 'sudo docker logs firstroll-caddy-1 2>&1 | grep -i $host | tail'" >&2
   exit 1
 fi
 gate=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://$host/")
