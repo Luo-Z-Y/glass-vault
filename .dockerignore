@@ -1,0 +1,14 @@
+# Only pyproject.toml, uv.lock, README.md and src/ go into the image (deploy/Dockerfile);
+# keep secrets and bulk out of the build context too.
+.env
+.env.*
+**/.env
+.venv
+.git
+**/__pycache__
+.pytest_cache
+docs
+evals
+scripts
+tests
+video

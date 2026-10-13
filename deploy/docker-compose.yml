@@ -1,0 +1,53 @@
+# Glass Vault next to FirstRoll on one server (deploy/README.md).
+#
+# FirstRoll's Caddy owns ports 80 and 443 and terminates TLS; its Caddyfile has a site block for
+# this demo that forwards to "glassvault:8000" over FirstRoll's network. Nothing here is published
+# on the host. deploy.sh installs this file as /opt/glassvault/docker-compose.yml and loads the
+# image, built elsewhere: the production server never builds.
+#
+# `.env` beside this file (root, mode 0600, never committed) holds the app's GV_* settings and keys,
+# plus GLASSVAULT_HOST, the site's host name.
+name: glassvault
+
+services:
+  glassvault:
+    image: glassvault:local
+    pull_policy: never
+    env_file: .env
+    environment:
+      # Pinned here, so nothing in .env can move the server off the address Caddy forwards to.
+      GV_HOST: 0.0.0.0
+      GV_PORT: "8000"
+      GV_ORIGIN: https://${GLASSVAULT_HOST:?set GLASSVAULT_HOST in .env}
+      GV_RP_ID: ${GLASSVAULT_HOST}
+      GV_SESSIONS: "1"
+      GV_ACCESS_PASSWORD: ${GV_ACCESS_PASSWORD:?set GV_ACCESS_PASSWORD in .env}
+      GV_PAID_CALLS_PER_HOUR: ${GV_PAID_CALLS_PER_HOUR:-300}
+    expose:
+      - "8000"
+    networks:
+      - firstroll
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    # FirstRoll's API keeps its 768M on the 2 GB server. No swap: if the demo ever runs out of
+    # memory it restarts, rather than slowing FirstRoll down.
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  firstroll:
+    external: true
+    name: firstroll_default
