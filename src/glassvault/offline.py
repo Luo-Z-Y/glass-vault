@@ -24,8 +24,9 @@ from .numbers import extract_amounts, extract_fractions
 # Requests the stand-in does not draft; it says what it can do instead.
 UNSUPPORTED = re.compile(r"\b(loan|borrow|crypto|bitcoin|btc|usd|us dollars?|overseas|remit|wire|invest in funds?)\b", re.I)
 VERB = r"(?:pay|send|move|transfer|put|give|buy|top\s+up|invest)"
-# Commas and full stops split clauses, except inside numbers ("1,500", "1.2k").
-CLAUSE_SPLIT = re.compile(rf"(?:;|[,.](?!\d)|\bthen\b|\balso\b|\band\b(?=\s+(?:then\s+)?{VERB}\b))", re.I)
+# Line breaks (the drafter's chat joins a customer's follow-up turns with one), commas and
+# full stops split clauses, except inside numbers ("1,500", "1.2k").
+CLAUSE_SPLIT = re.compile(rf"(?:;|\n|[,.](?!\d)|\bthen\b|\balso\b|\band\b(?=\s+(?:then\s+)?{VERB}\b))", re.I)
 SHARES = re.compile(r"\b(shares?|stocks?|invest)\b", re.I)
 BILL = re.compile(r"\bbill\b", re.I)
 ALL_BILLS = re.compile(r"\b(?:both|all)\s+(?:of\s+)?(?:my\s+)?bills\b", re.I)
@@ -103,31 +104,35 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
             continue
         step_id = f"t{len(steps) + 1}"
         amount, evidence = _amount(clause, steps, view)
+        named = _named_source(clause, view)
+        if named:
+            evidence = {**evidence, "from_account": named[1]}
         if SHARES.search(clause) or (re.search(r"\bbuy\b", clause, re.I) and _symbol(clause, view)[0]):
             symbol, said = _symbol(clause, view)
             if symbol is None:
                 return _ask("missing_info", "Which shares would you like to buy?")
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to invest in {view.market.name(symbol)}?")
-            steps.append({"id": step_id, "type": "equity_buy", "from_account": _default_source(steps, amount, shares=True), "symbol": symbol,
+            steps.append({"id": step_id, "type": "equity_buy", "from_account": named[0] if named else _default_source(steps, amount, shares=True), "symbol": symbol,
                           "amount": amount, "evidence": {**evidence, "symbol": said}})
         elif (every := ALL_BILLS.search(clause)) is not None:
             for biller in view.billers.values():
-                steps.append({"id": f"t{len(steps) + 1}", "type": "bill_payment", "from_account": "SAV",
+                steps.append({"id": f"t{len(steps) + 1}", "type": "bill_payment", "from_account": named[0] if named else "SAV",
                               "biller_id": biller.id, "amount": {"full_amount_due": True},
-                              "evidence": {"biller_id": every.group(0)}})
+                              "evidence": {"biller_id": every.group(0),
+                                           **({"from_account": named[1]} if named else {})}})
         elif BILL.search(clause):
             biller, said = _biller(clause, view)
             if biller is None:
                 return _ask("missing_info", "Which bill would you like to pay?")
-            steps.append({"id": step_id, "type": "bill_payment", "from_account": _default_source(steps, amount), "biller_id": biller,
+            steps.append({"id": step_id, "type": "bill_payment", "from_account": named[0] if named else _default_source(steps, amount), "biller_id": biller,
                           "amount": amount or {"full_amount_due": True},
                           "evidence": {**evidence, "biller_id": said}})
         elif (target := _own_account(clause, view)) is not None:
             to_account, said = target
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to move to your {view.accounts[to_account].name}?")
-            source = (amount or {}).get("fraction_of_balance", {}).get("account") or next(
+            source = (named[0] if named else None) or (amount or {}).get("fraction_of_balance", {}).get("account") or next(
                 a for a in view.accounts if a != to_account)
             steps.append({"id": step_id, "type": "own_transfer", "from_account": source, "to_account": to_account,
                           "amount": amount, "evidence": {**evidence, "to_account": said}})
@@ -143,7 +148,7 @@ def interpret(customer: Sequence[str], agent: Sequence[str], view: BankView) -> 
                 candidates = resolved
             if amount is None:
                 return _ask("ambiguous_amount", f"How much would you like to send to {view.payees[candidates[0]].legal_name}?")
-            steps.append({"id": step_id, "type": "paynow", "from_account": _default_source(steps, amount), "payee_id": candidates[0],
+            steps.append({"id": step_id, "type": "paynow", "from_account": named[0] if named else _default_source(steps, amount), "payee_id": candidates[0],
                           "amount": amount, "evidence": {**evidence, "payee_id": phrase}})
     if not steps:
         return _ask("missing_info", "Sorry, I didn't catch that. You can move money, send PayNow, pay a bill or buy shares.")
@@ -224,6 +229,15 @@ def _biller(clause: str, view: BankView) -> tuple[str | None, str]:
         if m := re.search(rf"\b{re.escape(word)}\b", clause, re.I):
             return biller.id, m.group(0)
     return None, ""
+
+
+def _named_source(clause: str, view: BankView) -> tuple[str, str] | None:
+    """An own account named as the source ("from my joint account", "using joint"), and the word that named it."""
+    for account in view.accounts.values():
+        word = account.name.split()[0]
+        if m := re.search(rf"\b(?:from|using|with|out of)\s+(?:my\s+|the\s+|our\s+)?({re.escape(word)})\b", clause, re.I):
+            return account.id, m.group(1)
+    return None
 
 
 def _own_account(clause: str, view: BankView) -> tuple[str, str] | None:

@@ -37,6 +37,22 @@ def test_brief_example_reaches_a_signable_confirmation(pipeline, gateway, phone,
     assert all(e.ok for e in o.trace)
 
 
+@pytest.mark.parametrize("text", [
+    "Send 100 to Mum from my joint account",
+    "Pay Mum 50 dollars using my joint account",
+    "Pay my SP bill from the joint account",
+    "Buy 500 dollars of DBS shares from my joint account",
+])
+def test_a_named_source_account_is_the_one_that_pays(pipeline, text):
+    o = talk(pipeline, text)
+    assert o.kind == "confirm" and o.confirmation.lines[0].endswith("from Joint Account")
+
+
+def test_a_short_account_is_named_in_words(pipeline):
+    o = talk(pipeline, "Send 4000 to Mum from my joint account")
+    assert o.kind == "refused" and o.message == "I can't do this: the Joint Account is short by S$800.00"
+
+
 def test_two_johns_are_resolved_by_asking(pipeline):
     first = talk(pipeline, "Pay my SP bill and send John fifty")
     assert first.kind == "clarify" and first.clarification.reason == "ambiguous_payee"
