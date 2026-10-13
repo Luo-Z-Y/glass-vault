@@ -537,6 +537,11 @@ async def record(browser_type, base: str, spec: dict[str, Any], manifest: dict[s
     try:
         context = await browser.new_context(no_viewport=True)
         await context.add_init_script(OVERLAY)
+        # The video approves with the labelled simulated key ("simulated here"), even on a Mac
+        # whose Touch ID would otherwise turn the button into "Set up Face ID".
+        await context.add_init_script(
+            "window.PublicKeyCredential && (PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable"
+            " = async () => false);")
         page = await context.new_page()
         if mics:
             await page.route("**/__video/mic-*.wav", lambda route: route.fulfill(

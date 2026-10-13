@@ -82,7 +82,7 @@ Speech recognition can mishear "fifteen" and "fifty". For a spoken PayNow amount
 ## How do I approve a payment, and what does the passkey do?
 Also asked as: approve, Face ID, Touch ID, passkey, biometric, confirm payment, sign, set up Face ID
 
-The assistant drafts the payment, the bank checks it, and you see a confirmation written from the bank's records, which can also be read aloud in the bank's voice. Approve it with your passkey (Face ID or Touch ID). Your device signs that exact confirmation, so the bank only executes what you approved. Until you tap "Set up Face ID", the demo uses a clearly labelled simulated approval.
+The assistant drafts the payment, the bank checks it, and you see a confirmation written from the bank's records, which can also be read aloud in the bank's voice. Approve it with your passkey (Face ID or Touch ID). Your device signs that exact confirmation, so the bank only executes what you approved. On a phone or computer with Face ID, Touch ID or Windows Hello, the first confirmation asks you to tap "Set up Face ID", which saves a real passkey for this demo on your device; after that, "Approve with Face ID" signs with it. On a device without one, or if you cancel the setup, the demo uses a clearly labelled simulated approval.
 
 ## How long do I have to approve?
 Also asked as: expire, expired, time limit, two minutes, approval timeout, quote expired, price expired

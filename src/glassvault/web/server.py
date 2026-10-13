@@ -681,6 +681,29 @@ def passkey_verify(req: RegisterRequest):
     return {"state": state_json(d)}
 
 
+class ApprovalOptionsRequest(BaseModel):
+    nonce: str
+
+
+@app.post("/api/passkey/approval-options")
+def passkey_approval_options(req: ApprovalOptionsRequest):
+    """WebAuthn options for a confirmation shown before the passkey was enrolled.
+
+    The confirmation came without them (there was no passkey to ask), so a device that sets up
+    Face ID from the confirmation itself fetches them here. They hold nothing the customer could
+    not compute: the challenge digest and the customer's own credential ids."""
+    d = current()
+    challenge = d.challenges.get(req.nonce)
+    if challenge is None:
+        return JSONResponse({"code": "UNKNOWN_CHALLENGE", "status": 404,
+                             "message": "no pending challenge has this nonce"}, 404)
+    if not d.verifier.has_passkey(d.bank.customer_id):
+        return JSONResponse({"code": "NO_PASSKEY", "status": 409,
+                             "message": "set up Face ID before asking it to sign"}, 409)
+    return {"webauthn": d.verifier.webauthn.authentication_options(
+        d.bank.customer_id, challenge_digest(challenge))}
+
+
 # --- "Try to rob this bank": direct attacks on the gateway -----------------------------------
 
 ATTACK_BUTTONS = [

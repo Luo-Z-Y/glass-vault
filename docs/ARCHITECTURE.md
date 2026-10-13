@@ -501,7 +501,9 @@ money moving before the audit write, and unaudited non-gateway errors.
 - The web demo and the gateway service approve with real WebAuthn passkeys
   (attestation "none"); the CLI demo, benchmark and tests use raw Ed25519
   `DeviceKey`s. The web demo enrols its first passkey without an enrolment
-  code, and signs with a labelled simulated key until one is enrolled.
+  code. On a device with Face ID, Touch ID or Windows Hello the first
+  confirmation enrols one; elsewhere, or if enrolment is cancelled, it signs
+  with a labelled simulated key until one is enrolled.
 - The step-up digital token is simulated: its secret lives in the gateway
   process, and the web demo shows the code at `/api/token/{nonce}`. The gateway
   service does not enrol a token, so it does not enforce step-up.
