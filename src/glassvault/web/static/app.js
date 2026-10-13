@@ -44,7 +44,7 @@ async function api(path, body) {
 }
 
 // "409 NONCE_CONSUMED" for the server's refusals; the error's name (e.g. "TypeError") otherwise.
-const errLabel = (err) => (err.code ? `${err.status} ${err.code}` : err.name);
+const errLabel = (err) => (err.status && typeof err.code === "string" ? `${err.status} ${err.code}` : err.name);
 
 // ---------------------------------------------------------------------------
 // Chat rendering
@@ -300,8 +300,11 @@ function voiceActivity(card, mode, text) {
   line.textContent = text;
 }
 
+let stateSeq = 0; // bumped by every renderState
+
 function renderState(s) {
   state = s;
+  stateSeq++;
   $("#customer-name").textContent = s.customer_name;
   const balances = $("#balances");
   balances.innerHTML = "";
@@ -364,6 +367,7 @@ async function approveChallenge(o, card) {
     await signChallenge(o, card, btn, passkey);
   } finally {
     delete card.dataset.busy;
+    settled();
   }
 }
 
@@ -497,6 +501,13 @@ let enrolling = false; // a Face ID setup is under way
 
 const enrolFresh = () => Boolean(enrolment) && Date.now() - enrolment.at < ENROL_FRESH_MS;
 
+// Forget any options, and any fetch on its way: the server no longer has them open.
+function dropEnrolment() {
+  enrolment = null;
+  enrolFetch = null;
+  enrolGen++;
+}
+
 function prepareEnrolment() {
   if (!platformPasskey || enrolDeclined || enrolling || state?.passkey?.registered || enrolFresh()) return;
   if (enrolFetch) return;
@@ -504,6 +515,7 @@ function prepareEnrolment() {
   const fetching = api("/api/passkey/register/options", {})
     .then((options) => {
       if (gen === enrolGen) enrolment = { options, at: Date.now() };
+      passkeyChannel?.postMessage("options"); // the server dropped any other tab's
     })
     .catch(() => {})
     .finally(() => {
@@ -516,10 +528,14 @@ async function enrolPasskey() {
   enrolling = true;
   try {
     if (!enrolFresh() && enrolFetch) await enrolFetch;
-    const options = enrolFresh() ? enrolment.options : await api("/api/passkey/register/options", {});
-    enrolment = null; // one ceremony per set of options
-    enrolGen++;
+    let options = enrolFresh() ? enrolment.options : null;
+    if (!options) {
+      options = await api("/api/passkey/register/options", {});
+      passkeyChannel?.postMessage("options");
+    }
+    dropEnrolment(); // one ceremony per set of options
     const cred = await navigator.credentials.create({ publicKey: creationOptions(options) });
+    // From here the device holds a new passkey: if the bank turns it down, say so.
     const { state: s } = await api("/api/passkey/register/verify", {
       credential: {
         id: cred.id,
@@ -533,6 +549,8 @@ async function enrolPasskey() {
           transports: cred.response.getTransports ? cred.response.getTransports() : [],
         },
       },
+    }).catch((err) => {
+      throw Object.assign(err, { afterCreate: true });
     });
     return s;
   } finally {
@@ -541,29 +559,46 @@ async function enrolPasskey() {
 }
 
 // Back in step with the server: after another tab set up Face ID or reset the demo, or on coming
-// back to this page. Not while this page is setting up Face ID or signing: their own answers
-// carry the state, and an older one arriving after them would undo it.
+// back to this page. Not while this page is setting up Face ID or signing (their own answers
+// carry the state); it runs once they finish instead.
+let resyncWaiting = false;
+
 async function resync() {
-  if (enrolling || document.querySelector(".confirm[data-busy]")) return;
-  const gen = demoGen;
-  enrolment = null; // another tab may have fetched options since, voiding these
-  enrolGen++;
-  let s;
-  try {
-    s = await api("/api/state");
-  } catch {
+  if (enrolling || document.querySelector(".confirm[data-busy]")) {
+    resyncWaiting = true;
     return;
   }
-  if (gen !== demoGen || enrolling) return;
-  renderState(s);
+  resyncWaiting = false;
+  const gen = demoGen;
+  const seen = stateSeq;
+  try {
+    const s = await api("/api/state");
+    // Something newer was drawn meanwhile (an approval, a setup, a message): keep that.
+    if (gen === demoGen && seen === stateSeq && !enrolling) renderState(s);
+  } catch {
+    // offline for now: keep what this page knows
+  }
+  if (gen !== demoGen) return;
+  if (state?.passkey?.registered) dropEnrolment();
   await refreshConfirms();
   if ([...openConfirms.keys()].some((c) => c.querySelector(".approve")?.dataset.mode === "enrol")) prepareEnrolment();
 }
 
+// A setup or a signature finished: catch up if a resync had to wait for it.
+function settled() {
+  if (resyncWaiting) resync();
+}
+
 passkeyChannel?.addEventListener("message", (e) => {
+  if (e.data === "options") {
+    // Another tab of this demo fetched options, so the server dropped this tab's. Fetch new ones
+    // when this tab is back in use, not now: two tabs would otherwise keep voiding each other's.
+    if (!enrolling) dropEnrolment();
+    return;
+  }
   if (e.data === "reset") {
     demoGen++;
-    enrolDeclined = false;
+    clearDemoView();
   }
   resync();
 });
@@ -581,14 +616,17 @@ async function enrolFailed(err, gen) {
   if (gen !== demoGen) return;
   if (s) renderState(s);
   if (state?.passkey?.registered) {
+    // Set up in another tab meanwhile. Fine, unless this device went on to make a passkey of its
+    // own: under the same user handle it may have replaced the one the bank accepted.
     await refreshConfirms();
-    addMsg("system", err.code === "DEVICE_ALREADY_REGISTERED" ? "Face ID is already set up for this demo."
-      : "Face ID was set up for this demo in another tab. If this device saved a second passkey just now, tap Reset and set it up again.");
+    addMsg("system", err.afterCreate
+      ? "Face ID was set up for this demo in another tab, and this device may have replaced that passkey just now. If Approve with Face ID fails, tap Reset and set it up again."
+      : "Face ID is already set up for this demo.");
     return;
   }
   enrolDeclined = true;
   await refreshConfirms();
-  const saved = err.code === "ENROLMENT_REJECTED"
+  const saved = err.afterCreate
     ? " Your device may have saved a passkey the bank did not accept; you can delete it." : "";
   addMsg("system", `Face ID was not set up (${errLabel(err)}).${saved} ` +
     'Approve with the simulated key, or tap "Set up Face ID" above to try again.');
@@ -597,6 +635,14 @@ async function enrolFailed(err, gen) {
 
 // Set up Face ID; false if the demo was reset meanwhile (the result belongs to the old one).
 async function enrolAndShow() {
+  try {
+    return await enrolAndShowOnce();
+  } finally {
+    settled();
+  }
+}
+
+async function enrolAndShowOnce() {
   const gen = demoGen;
   let s;
   try {
@@ -1230,20 +1276,23 @@ $("#reset").addEventListener("click", async () => {
   const { state: s } = await api("/api/reset", {});
   demoGen++;
   renderState(s);
-  chat.querySelectorAll(".msg:not(:first-child)").forEach((m) => m.remove());
-  // A new demo: no registration open, and Face ID is offered again.
-  openConfirms.clear();
-  enrolment = null;
-  enrolFetch = null;
-  enrolGen++;
-  enrolDeclined = false;
+  clearDemoView();
   passkeyChannel?.postMessage("reset");
+});
+
+// A new demo (Reset, here or in another tab): an empty conversation, no registration open, and
+// Face ID offered again.
+function clearDemoView() {
+  chat.querySelectorAll(".msg:not(:first-child)").forEach((m) => m.remove());
+  openConfirms.clear();
+  dropEnrolment();
+  enrolDeclined = false;
   renderStages([]);
   renderDiff(null);
   $("#attack-log").innerHTML = "";
   resetHelp();
   refreshAudit();
-});
+}
 
 (async function init() {
   tickClock();
