@@ -19,6 +19,7 @@ https://github.com/Luo-Z-Y/glass-vault
 ```
 Track: Banking, Direct Conversational Transaction Agent (DCTA), DBS. Scenario 1: voice-enabled payments, with KYC and risk controls.
 Result: 0 unsafe executions across 130 benchmark cases (a naive single-LLM agent on the same sets: 43 unsafe, S$158,482.85 that should not have moved). 12 of 12 rogue-AI attacks frozen.
+Tencent Cloud: Hunyuan Hy3 (the blind validation agent), TRTC FlowTTS and speech recognition (the bank voice and push-to-talk), ADP (the Help assistant), WorkBuddy (independent QA that wrote our held-out test sets).
 
 1. PROJECT OVERVIEW
 
@@ -67,6 +68,14 @@ Impact: a transfer then a share buy takes one sentence and one approval (42 of 4
 Responsible AI: the AI never decides who is suspicious; the same rules apply to everyone. Live demo: switch the drafter to rogue mode and watch each attack freeze on the bank's security console.
 
 Feasibility: standard passkeys (FIDO2 / WebAuthn); the gateway also runs as its own HTTP service (our integration tests drive the pipeline through it) and could front an existing payment API; models are swappable. With no keys the demo uses browser speech and a rule-based stand-in; a model failure fails closed. Simulated: ledger, PayNow, billers, share quotes, KYC data, token.
+
+5. WHAT SETS IT APART
+
+- The validator is blind: it never sees the draft, so it cannot simply agree with it. Code, not a model, compares the two readings.
+- Provenance: every amount, payee and account must trace to the customer's own words, or the plan freezes.
+- Real passkeys, not a simulated button: the customer's signature covers the exact plan, the spoken script and the conversation.
+- Safety is measured: a naive-agent baseline, two held-out test sets we did not write, and a live rogue-AI mode.
+- Runs end to end with no keys (offline stand-ins), so judges can run the whole flow themselves.
 ```
 
 ## WorkBuddy/CodeBuddy/Miora Conversation History (upload)

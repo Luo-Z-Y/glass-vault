@@ -18,6 +18,47 @@ switch the AI to rogue mode and show it still cannot move a cent.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): architecture, tech-stack and codebase diagrams; the request pipeline, invariants, error codes, processes and known gaps
 - [docs/CONTRACTS.md](docs/CONTRACTS.md): module interfaces
 
+## For judges
+
+| To check | Where |
+|---|---|
+| The AI cannot move money | `gateway.py` is the only code that changes balances; the pipeline reaches it through `GatewayPort`, which has no execute method. Try it: `uv run python -i scripts/playground.py` |
+| Every DBS requirement and the layer that meets it | Section 3 of [docs/submission/description.md](docs/submission/description.md) |
+| Which Tencent Cloud products, and why | [Tencent Cloud in Glass Vault](#tencent-cloud-in-glass-vault) |
+| What is different from a typical banking agent | [How Glass Vault differs](#how-glass-vault-differs) |
+| Attacks and what stops each | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) (18 attacks); live: the web demo's rogue-AI switch |
+| Measured safety, not claimed | [Benchmark](#benchmark): 0 unsafe executions in 130 cases, against a naive agent's 43; scorecards in `evals/results/` |
+| Independent test sets | `evals/heldout.yaml`, `evals/heldout2.yaml`, written by WorkBuddy without seeing our prompts or code |
+| Real passkeys | `services/webauthn_verifier.py`; the web demo approves with Face ID / Touch ID |
+| How it was built | [docs/codebuddy-log.md](docs/codebuddy-log.md), screenshots in `docs/codebuddy/` |
+
+## Tencent Cloud in Glass Vault
+
+| Need | Tencent product | Where it sits |
+|---|---|---|
+| Validation agent | **Hunyuan Hy3**, a different model family from the DeepSeek drafter, so two independent readings must agree | control plane; can only stop a payment, never approve one |
+| Bank voice | **TRTC** FlowTTS text-to-speech, reading only bank-rendered confirmation scripts | customer device; the hash of the spoken script is in the signed challenge |
+| Push-to-talk | **TRTC** speech recognition | customer device; the transcript is marked as voice, so a misheard "fifteen / fifty" becomes a question |
+| Help (bank FAQ) | **Tencent ADP** knowledge-base Q&A app over `faq.md`, created by `scripts/adp_setup.py` | outside the money path: no tools, no account data |
+| Independent QA | **WorkBuddy** wrote both held-out test sets from a spec alone | evals |
+
+Every Tencent service is optional at runtime: without keys the demo falls back to
+browser speech, the FAQ itself and a rule-based offline stand-in, so it always runs.
+We deliberately give no model a tool that acts: ADP answers questions and
+Hunyuan reads transcripts, and neither can reach the gateway.
+
+## How Glass Vault differs
+
+| Common approach | What goes wrong | Glass Vault |
+|---|---|---|
+| Give the agent a `transfer()` tool and a confirm button | One hallucination or injected sentence is one tap from moving money | The LLM can only fill in a typed plan. Only the gateway moves money, and only for a plan the customer's passkey signed |
+| Show a second model the draft and ask "is this right?" | A model shown an answer tends to agree with it | The validator never sees the draft (`validator.py` has no parameter it could travel through); code compares the two readings field by field |
+| Let the model write the confirmation | The screen can say one payee while the plan pays another | Confirmations and speech come from templates and bank records; the gateway re-derives every recipient name and refuses a mismatch |
+| Let the model work out "half of it" | Arithmetic and rounding errors in money | The plan keeps "half of it" as a reference; `evaluator.py` computes it in Decimal against simulated balances |
+| Trust any amount the model outputs | An amount or payee the customer never said | Provenance: every amount, payee and account must trace to the customer's own words, or the plan freezes |
+| A simulated "biometric" button | No proof of what the customer approved | Real WebAuthn passkeys; the signature covers the plan hash, a one-time nonce, a 2-minute expiry and the hashes of the spoken script and conversation |
+| Safety asserted in a README | Unknown failure rate | A benchmark against a naive agent, two held-out sets we did not write, and a live rogue-AI mode on stage |
+
 ## Run it
 
 ```bash
