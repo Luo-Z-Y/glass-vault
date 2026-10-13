@@ -22,6 +22,7 @@ switch the AI to rogue mode and show it still cannot move a cent.
 
 | To check | Where |
 |---|---|
+| Try it live | https://glassvault.luo-zy.com: sign in as `judge` with the password at the end of the Project Description in [docs/submission/description.md](docs/submission/description.md) |
 | The AI cannot move money | `gateway.py` is the only code that changes balances; the pipeline reaches it through `GatewayPort`, which has no execute method. Try it: `uv run python -i scripts/playground.py` |
 | Every DBS requirement and the layer that meets it | Section 3 of [docs/submission/description.md](docs/submission/description.md) |
 | Which Tencent Cloud products, and why | [Tencent Cloud in Glass Vault](#tencent-cloud-in-glass-vault) |
