@@ -14,14 +14,22 @@ without them, the browser's own speech is used. With GV_ADP_APP_KEY (see `faq.py
 Help, the bank FAQ assistant, is a Tencent ADP knowledge-Q&A app; without it, Help
 answers from the built-in FAQ. Help stands apart from the payment conversation: its
 words never enter the dialogue, the audit log or the bank voice.
+
+Hosted for others (deploy/README.md), it can ask for a password, give each visitor a
+demo of their own and cap its paid calls per hour: see "Hosting" below.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
+import secrets
 import threading
-from collections import OrderedDict
+import time
+from base64 import b64decode
+from collections import OrderedDict, deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -34,6 +42,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from .. import faq
 from ..audit import AuditLog
@@ -150,7 +159,7 @@ def new_demo() -> Demo:
                 faq=faq.faq_from_env())
 
 
-demo = new_demo()
+demo = new_demo()  # the one shared demo, unless GV_SESSIONS gives each visitor their own
 app = FastAPI(title="Glass Vault demo")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -164,6 +173,143 @@ async def revalidate_ui(request: Request, call_next):
     return response
 
 
+# --- Hosting: who may visit, whose demo, and how much it may spend -------------------
+#
+# All off unless set, so a local run behaves as before. A public deployment sets them
+# (deploy/README.md): every call to a model, Tencent RTC or ADP spends the account's credit.
+#
+#   GV_ACCESS_PASSWORD      every request needs it (HTTP basic auth, user GV_ACCESS_USER or "judge")
+#   GV_SESSIONS=1           each visitor (a cookie) gets a demo of their own, so one visitor's
+#                           rogue mode, passkey or payments never show up in another's
+#   GV_PAID_CALLS_PER_HOUR  at most this many calls to a model, Tencent RTC or ADP, all visitors
+#                           together; a request that would spend nothing is not counted
+#
+# Always on: request bodies over 4 MB are refused (a recording is at most 2 MB), and a write to
+# /api/ from another site is refused (see _cross_site).
+
+ACCESS_USER = os.environ.get("GV_ACCESS_USER") or "judge"
+ACCESS_PASSWORD = os.environ.get("GV_ACCESS_PASSWORD") or ""
+SESSIONS = os.environ.get("GV_SESSIONS") == "1"
+MAX_SESSIONS = int(os.environ.get("GV_MAX_SESSIONS") or "16")  # the least recently used demo goes first
+PAID_CALLS_PER_HOUR = int(os.environ.get("GV_PAID_CALLS_PER_HOUR") or "0")  # 0: no cap
+MAX_BODY = 4 * 1024 * 1024
+MAX_AUDIT = 2000  # a demo whose audit log is this long takes no more requests until it is reset
+# Over HTTPS the cookie is a __Host- cookie, which only this host can set: other *.sslip.io sites
+# could otherwise plant a visitor id (sslip.io is not a public suffix).
+VISITOR_COOKIE = "__Host-gv_visitor" if ORIGIN.startswith("https://") else "gv_visitor"
+VISITOR_ID = re.compile(r"[A-Za-z0-9_-]{22,64}")
+
+_visitor: ContextVar[str | None] = ContextVar("visitor", default=None)
+_fresh: ContextVar[bool] = ContextVar("fresh", default=False)  # this request came without a visitor id
+_sessions: OrderedDict[str, Demo] = OrderedDict()
+_sessions_lock = threading.Lock()
+_paid_calls: deque[float] = deque()
+_paid_lock = threading.Lock()
+
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY)
+
+
+def current() -> Demo:
+    """The demo this request acts on: the visitor's own with GV_SESSIONS, else the shared one.
+
+    A request without a visitor id gets a throwaway demo, so cookieless requests (scripts, or a
+    browser that refuses the cookie) can never push a judge's demo out of the store.
+    """
+    visitor = _visitor.get()
+    if visitor is None:
+        return demo
+    if _fresh.get():
+        return new_demo()
+    with _sessions_lock:
+        d = _sessions.get(visitor)
+        if d is None:
+            d = _sessions[visitor] = new_demo()
+            while len(_sessions) > MAX_SESSIONS:
+                _sessions.popitem(last=False)
+        _sessions.move_to_end(visitor)
+        return d
+
+
+def replace_demo() -> Demo:
+    """A fresh demo in place of this request's one (the Reset button)."""
+    global demo
+    visitor = _visitor.get()
+    if visitor is None:
+        demo = new_demo()
+        return demo
+    if _fresh.get():
+        return new_demo()
+    with _sessions_lock:
+        d = _sessions[visitor] = new_demo()
+        _sessions.move_to_end(visitor)
+        while len(_sessions) > MAX_SESSIONS:
+            _sessions.popitem(last=False)
+        return d
+
+
+def _authorised(request: Request) -> bool:
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        user, _, password = b64decode(value, validate=True).decode("utf-8").partition(":")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    # Both compared in constant time, and both always compared.
+    return secrets.compare_digest(user.encode(), ACCESS_USER.encode()) & \
+        secrets.compare_digest(password.encode(), ACCESS_PASSWORD.encode())
+
+
+def spend() -> JSONResponse | None:
+    """Count one call to a paid service, just before it is made; a refusal if the hour's budget is spent."""
+    if not PAID_CALLS_PER_HOUR:
+        return None
+    now = time.monotonic()
+    with _paid_lock:
+        while _paid_calls and now - _paid_calls[0] > 3600:
+            _paid_calls.popleft()
+        if len(_paid_calls) >= PAID_CALLS_PER_HOUR:
+            return _refusal("BUSY", 429, "The demo has reached its hourly limit. Please try again later.")
+        _paid_calls.append(now)
+    return None
+
+
+def full(d: Demo) -> JSONResponse | None:
+    """A refusal once a demo has grown too big to keep (Reset starts it again), else None."""
+    if len(d.audit.entries) > MAX_AUDIT:
+        return _refusal("DEMO_FULL", 429, "This demo is full: press Reset to start again.")
+    return None
+
+
+@app.middleware("http")
+async def hosting(request: Request, call_next):
+    """Access, cross-site writes, then the visitor's demo (see above). /healthz is open."""
+    if request.url.path == "/healthz":
+        return JSONResponse({"status": "ok"})
+    if ACCESS_PASSWORD and not _authorised(request):
+        return Response("Glass Vault demo: sign in with the user name and password you were given.", 401,
+                        {"WWW-Authenticate": 'Basic realm="Glass Vault demo", charset="UTF-8"'}, "text/plain")
+    if request.method != "GET" and request.url.path.startswith("/api/") and \
+            (refused := _cross_site(request, "this demo")) is not None:
+        return refused
+    if not SESSIONS:
+        return await call_next(request)
+    visitor = request.cookies.get(VISITOR_COOKIE, "")
+    fresh = not VISITOR_ID.fullmatch(visitor)
+    if fresh:
+        visitor = secrets.token_urlsafe(24)
+    tokens = _visitor.set(visitor), _fresh.set(fresh)
+    try:
+        response = await call_next(request)
+    finally:
+        _visitor.reset(tokens[0])
+        _fresh.reset(tokens[1])
+    if fresh:
+        response.set_cookie(VISITOR_COOKIE, visitor, max_age=30 * 86400, httponly=True, samesite="lax",
+                            secure=ORIGIN.startswith("https://"))
+    return response
+
+
 # --- JSON shapes -------------------------------------------------------------------
 
 
@@ -172,30 +318,30 @@ def llm_json(llm: LLM) -> dict[str, str | None]:
     return {"model": model, "host": host or None}
 
 
-def state_json() -> dict[str, Any]:
-    customer = demo.bank.customer_id
+def state_json(d: Demo) -> dict[str, Any]:
+    customer = d.bank.customer_id
     return {
-        "customer_name": demo.bank.customer_name,
-        "accounts": [{"id": a.id, "name": a.name, "balance": str(a.balance)} for a in demo.bank.accounts.values()],
-        "llm_mode": demo.llm_mode,
-        "llm": {"live": not isinstance(demo.drafter, OfflineLLM),
-                "drafter": llm_json(demo.drafter), "validator": llm_json(demo.validator)},
-        "rogue": demo.rogue,
-        "passkey": {"registered": demo.verifier.has_passkey(customer),
-                    "simulated_allowed": not demo.verifier.has_passkey(customer)},
-        "attacks": {"blocked": demo.blocked, "funds_moved": str(demo.funds_moved)},
-        "voice": voice_json(),
-        "faq": faq_json(),
+        "customer_name": d.bank.customer_name,
+        "accounts": [{"id": a.id, "name": a.name, "balance": str(a.balance)} for a in d.bank.accounts.values()],
+        "llm_mode": d.llm_mode,
+        "llm": {"live": not isinstance(d.drafter, OfflineLLM),
+                "drafter": llm_json(d.drafter), "validator": llm_json(d.validator)},
+        "rogue": d.rogue,
+        "passkey": {"registered": d.verifier.has_passkey(customer),
+                    "simulated_allowed": not d.verifier.has_passkey(customer)},
+        "attacks": {"blocked": d.blocked, "funds_moved": str(d.funds_moved)},
+        "voice": voice_json(d),
+        "faq": faq_json(d),
     }
 
 
-def voice_json() -> dict[str, Any]:
+def voice_json(d: Demo) -> dict[str, Any]:
     """Who listens and who speaks for the bank: TRTC where it is set up, otherwise the browser.
 
     Beyond the engine and name, the details are for display only, so a voice that lacks them
     (a test double, say) still works: the page shows its name instead.
     """
-    tts, asr = demo.tts, demo.asr
+    tts, asr = d.tts, d.asr
     speak: dict[str, Any] = {"engine": "browser", "name": None}
     if tts:
         voice = getattr(tts, "voice", None)
@@ -208,37 +354,38 @@ def voice_json() -> dict[str, Any]:
     return {"speak": speak, "listen": listen}
 
 
-def faq_json() -> dict[str, Any]:
+def faq_json(d: Demo) -> dict[str, Any]:
     """Who answers Help: a Tencent ADP app where one is set up, otherwise the built-in FAQ.
 
     The name and host are for display only, so a stand-in that lacks them (a test double, say)
     still works, as with voice_json().
     """
-    if demo.faq is None:
+    if d.faq is None:
         return {"engine": "offline", "name": None, "host": None}
-    return {"engine": "adp", "name": getattr(demo.faq, "name", None), "host": getattr(demo.faq, "host", None)}
+    return {"engine": "adp", "name": getattr(d.faq, "name", None), "host": getattr(d.faq, "host", None)}
 
 
 MAX_SCRIPTS = 64
+MAX_AUDIO = 8  # recent audio kept per demo, about 1.5 MB each
 
 
-def speech(o: Outcome) -> str | None:
+def speech(d: Demo, o: Outcome) -> str | None:
     """Register the bank-rendered script this outcome may speak, and return its SHA-256 (the voice's key)."""
     script = (o.confirmation or o.answer).spoken_script if (o.confirmation or o.answer) else None
     if not script:
         return None
     key = hashlib.sha256(script.encode("utf-8")).hexdigest()  # equals the confirmation's script_hash
-    with demo.voice_lock:
-        demo.scripts[key] = script
-        demo.scripts.move_to_end(key)
-        while len(demo.scripts) > MAX_SCRIPTS:
-            old, _ = demo.scripts.popitem(last=False)
-            demo.audio.pop(old, None)
-            demo.synthesising.pop(old, None)
+    with d.voice_lock:
+        d.scripts[key] = script
+        d.scripts.move_to_end(key)
+        while len(d.scripts) > MAX_SCRIPTS:
+            old, _ = d.scripts.popitem(last=False)
+            d.audio.pop(old, None)
+            d.synthesising.pop(old, None)
     return key
 
 
-def outcome_json(o: Outcome) -> dict[str, Any]:
+def outcome_json(d: Demo, o: Outcome) -> dict[str, Any]:
     data: dict[str, Any] = {
         "kind": o.kind,
         "message": o.message,
@@ -259,9 +406,9 @@ def outcome_json(o: Outcome) -> dict[str, Any]:
     if o.challenge:
         data["challenge"] = {"nonce": o.challenge.nonce, "expires_at": o.challenge.expires_at.isoformat(),
                              "step_up_required": o.challenge.step_up_required}
-        if demo.verifier.has_passkey(demo.bank.customer_id):
-            data["webauthn"] = demo.verifier.webauthn.authentication_options(
-                demo.bank.customer_id, challenge_digest(o.challenge))
+        if d.verifier.has_passkey(d.bank.customer_id):
+            data["webauthn"] = d.verifier.webauthn.authentication_options(
+                d.bank.customer_id, challenge_digest(o.challenge))
     return data
 
 
@@ -279,14 +426,12 @@ def index() -> FileResponse:
 
 @app.get("/api/state")
 def get_state() -> dict[str, Any]:
-    return state_json()
+    return state_json(current())
 
 
 @app.post("/api/reset")
 def reset() -> dict[str, Any]:
-    global demo
-    demo = new_demo()
-    return {"state": state_json()}
+    return {"state": state_json(replace_demo())}
 
 
 class RogueRequest(BaseModel):
@@ -297,8 +442,9 @@ class RogueRequest(BaseModel):
 def set_rogue(req: RogueRequest) -> dict[str, Any]:
     if req.attack is not None and req.attack not in ATTACKS:
         raise HTTPException(400, f"unknown attack {req.attack!r}")
-    demo.rogue = req.attack
-    return {"state": state_json()}
+    d = current()
+    d.rogue = req.attack
+    return {"state": state_json(d)}
 
 
 # --- Conversation ----------------------------------------------------------------------
@@ -310,7 +456,7 @@ class MessageRequest(BaseModel):
 
 
 @app.post("/api/message")
-def message(req: MessageRequest) -> dict[str, Any]:
+def message(req: MessageRequest):
     text = req.text.strip()[:500]
     if not text:
         raise HTTPException(400, "empty message")
@@ -318,21 +464,26 @@ def message(req: MessageRequest) -> dict[str, Any]:
         turn = Turn(role="customer", text=text, via="voice" if req.voice else "text")
     except ValidationError:
         raise HTTPException(400, "message is not valid text") from None
-    demo.dialogue.append(turn)
+    d = current()
+    if (refused := full(d)) is not None:
+        return refused
+    if not isinstance(d.drafter, OfflineLLM) and (busy := spend()) is not None:
+        return busy
+    d.dialogue.append(turn)
     try:
-        outcome = demo.pipeline.handle(demo.dialogue)
+        outcome = d.pipeline.handle(d.dialogue)
     except Exception:
-        demo.dialogue.clear()  # one broken turn must not break every turn after it
+        d.dialogue.clear()  # one broken turn must not break every turn after it
         raise
     if outcome.kind == "clarify":
-        demo.dialogue.append(Turn(role="agent", text=outcome.message))
+        d.dialogue.append(Turn(role="agent", text=outcome.message))
     else:
-        demo.dialogue.clear()
+        d.dialogue.clear()
     if outcome.challenge:
-        demo.challenges[outcome.challenge.nonce] = outcome.challenge
-    data = outcome_json(outcome)
-    data["speech"] = speech(outcome)
-    return {"outcome": data, "state": state_json()}
+        d.challenges[outcome.challenge.nonce] = outcome.challenge
+    data = outcome_json(d, outcome)
+    data["speech"] = speech(d, outcome)
+    return {"outcome": data, "state": state_json(d)}
 
 
 # --- Voice (TRTC) -----------------------------------------------------------------------
@@ -359,25 +510,30 @@ def voice(script_hash: str, request: Request):
     """A bank-rendered script in the bank's TRTC voice, as WAV. It speaks nothing else: there is no text input."""
     if (refused := _cross_site(request)) is not None:
         return refused
-    if demo.tts is None:
+    d = current()
+    if d.tts is None:
         return _refusal("VOICE_OFF", 404, "TRTC voice is not set up")
-    with demo.voice_lock:
-        script = demo.scripts.get(script_hash)
-        audio = demo.audio.get(script_hash)
+    with d.voice_lock:
+        script = d.scripts.get(script_hash)
+        audio = d.audio.get(script_hash)
         if script is not None and audio is None:
-            busy = demo.synthesising.setdefault(script_hash, threading.Lock())  # kept as long as the script
+            busy = d.synthesising.setdefault(script_hash, threading.Lock())  # kept as long as the script
     if script is None:
         return _refusal("UNKNOWN_SCRIPT", 404, "not a script the bank rendered")
     if audio is None:
         try:
             with busy:  # a second request for the same script waits for the first one's audio
-                with demo.voice_lock:
-                    audio = demo.audio.get(script_hash)
+                with d.voice_lock:
+                    audio = d.audio.get(script_hash)
                 if audio is None:
-                    audio = demo.tts.synthesize(script)
-                    with demo.voice_lock:
-                        if script_hash in demo.scripts:  # not evicted meanwhile
-                            demo.audio[script_hash] = audio
+                    if (refused := spend()) is not None:
+                        return refused
+                    audio = d.tts.synthesize(script)
+                    with d.voice_lock:
+                        if script_hash in d.scripts:  # not evicted meanwhile
+                            d.audio[script_hash] = audio
+                            while len(d.audio) > MAX_AUDIO:  # the oldest audio goes; it can be made again
+                                d.audio.pop(next(iter(d.audio)))
         except VoiceError as e:
             return _refusal(e.code, 502, e.message)
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=600"})
@@ -388,7 +544,8 @@ async def transcribe(request: Request):
     """One push-to-talk recording (mono 16-bit 16 kHz WAV) as text, by TRTC speech recognition."""
     if (refused := _cross_site(request)) is not None:
         return refused
-    if demo.asr is None:
+    d = current()
+    if d.asr is None:
         return _refusal("ASR_OFF", 404, "TRTC speech recognition is not set up")
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "audio/wav":
         # Not a type a form or a no-cors fetch can send, so another site's page cannot post here unasked.
@@ -398,8 +555,10 @@ async def transcribe(request: Request):
         body += chunk
         if len(body) > ASR_MAX_BYTES:
             return _refusal("AUDIO_TOO_LONG", 413, "recording too long")
+    if (refused := spend()) is not None:
+        return refused
     try:
-        text = await run_in_threadpool(demo.asr.transcribe, bytes(body))
+        text = await run_in_threadpool(d.asr.transcribe, bytes(body))
     except VoiceError as e:
         return _refusal(e.code, 400 if e.code in ("BAD_AUDIO", "AUDIO_TOO_LONG") else 502, e.message)
     return {"text": text}
@@ -427,11 +586,14 @@ def ask_faq(req: FaqRequest, request: Request):
         question = faq.check_question(req.text)
     except faq.HelpError as e:
         return _refusal(e.code, 400, e.message)
-    answer = faq.answer(question, demo.faq, conversation_id=demo.faq_conversation)
+    d = current()
+    if d.faq is not None and (refused := spend()) is not None:
+        return refused
+    answer = faq.answer(question, d.faq, conversation_id=d.faq_conversation)
     return {
         "answer": {"text": answer.text, "source": answer.source, "matched": answer.matched,
                    "references": list(answer.references), "note": answer.note},
-        "faq": faq_json(),
+        "faq": faq_json(d),
     }
 
 
@@ -440,8 +602,9 @@ def ask_faq(req: FaqRequest, request: Request):
 
 @app.post("/api/cancel")
 def cancel() -> dict[str, Any]:
-    demo.dialogue.clear()
-    return {"state": state_json()}
+    d = current()
+    d.dialogue.clear()
+    return {"state": state_json(d)}
 
 
 class ApproveRequest(BaseModel):
@@ -453,19 +616,22 @@ class ApproveRequest(BaseModel):
 
 @app.post("/api/approve")
 def approve(req: ApproveRequest):
-    challenge = demo.challenges.get(req.nonce)
+    d = current()
+    if (refused := full(d)) is not None:
+        return refused
+    challenge = d.challenges.get(req.nonce)
     if req.assertion is not None:
         proof: Any = _webauthn_fields(req.assertion)
-    elif req.simulated and challenge is not None and not demo.verifier.has_passkey(demo.bank.customer_id):
-        proof = demo.simulated_phone.sign(challenge_digest(challenge))  # labelled "simulated" in the UI
+    elif req.simulated and challenge is not None and not d.verifier.has_passkey(d.bank.customer_id):
+        proof = d.simulated_phone.sign(challenge_digest(challenge))  # labelled "simulated" in the UI
     else:
         proof = None
     try:
-        receipts = demo.gateway.execute(nonce=req.nonce, signature=proof, step_up_code=req.step_up_code)
+        receipts = d.gateway.execute(nonce=req.nonce, signature=proof, step_up_code=req.step_up_code)
     except GatewayError as e:
         return error(e)
-    demo.last_approval = (req.nonce, proof)
-    return {"receipts": [r.__dict__ for r in receipts], "state": state_json()}
+    d.last_approval = (req.nonce, proof)
+    return {"receipts": [r.__dict__ for r in receipts], "state": state_json(d)}
 
 
 def _webauthn_fields(assertion: dict[str, Any]) -> dict[str, Any]:
@@ -482,7 +648,7 @@ def _webauthn_fields(assertion: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/token/{nonce}")
 def token_code(nonce: str) -> dict[str, Any]:
     """The simulated digital token: in real life a separate device the agent can't reach."""
-    return {"code": demo.token.code(nonce)}
+    return {"code": current().token.code(nonce)}
 
 
 # --- Passkey enrolment ------------------------------------------------------------------
@@ -490,12 +656,15 @@ def token_code(nonce: str) -> dict[str, Any]:
 
 @app.post("/api/passkey/register/options")
 def passkey_options():
-    customer = demo.bank.customer_id
-    if demo.verifier.has_passkey(customer):
+    d = current()
+    if (refused := full(d)) is not None:
+        return refused
+    customer = d.bank.customer_id
+    if d.verifier.has_passkey(customer):
         return JSONResponse({"code": "DEVICE_ALREADY_REGISTERED", "status": 409,
                              "message": "a passkey is already enrolled; reset the demo to enrol again"}, 409)
-    return demo.verifier.webauthn.registration_options(customer, user_name="weiling@glassvault.demo",
-                                                       display_name=demo.bank.customer_name)
+    return d.verifier.webauthn.registration_options(customer, user_name="weiling@glassvault.demo",
+                                                       display_name=d.bank.customer_name)
 
 
 class RegisterRequest(BaseModel):
@@ -504,11 +673,12 @@ class RegisterRequest(BaseModel):
 
 @app.post("/api/passkey/register/verify")
 def passkey_verify(req: RegisterRequest):
+    d = current()
     try:
-        demo.verifier.webauthn.verify_registration(demo.bank.customer_id, req.credential)
+        d.verifier.webauthn.verify_registration(d.bank.customer_id, req.credential)
     except Exception as e:  # EnrolmentError and friends
         return JSONResponse({"code": "ENROLMENT_REJECTED", "status": 400, "message": str(e)[:200]}, 400)
-    return {"state": state_json()}
+    return {"state": state_json(d)}
 
 
 # --- "Try to rob this bank": direct attacks on the gateway -----------------------------------
@@ -523,35 +693,35 @@ ATTACK_BUTTONS = [
 ]
 
 
-def _theft_plan(payee: str = "P_JLIM", amount: str = "9000"):
+def _theft_plan(d: Demo, payee: str = "P_JLIM", amount: str = "9000"):
     plan = Plan(steps=[PayNowTransfer(id="t1", from_account="SAV", payee_id=payee,
                                       amount=FixedAmount(value=Decimal(amount)))])
-    return resolve(plan, demo.bank.view(), now=demo.gateway.now())
+    return resolve(plan, d.bank.view(), now=d.gateway.now())
 
 
-def _attack(kind: str) -> tuple[Decimal, Any]:
+def _attack(d: Demo, kind: str) -> tuple[Decimal, Any]:
     """Run one attack; returns (amount at stake, gateway result). Raises GatewayError when blocked."""
-    gw = demo.gateway
+    gw = d.gateway
     match kind:
         case "no_approval":
-            plan = _theft_plan()
+            plan = _theft_plan(d)
             return plan.steps[0].amount, gw.execute(plan)
         case "forge":
-            plan = _theft_plan(amount="900")  # under the new-payee limit, so only the signature stands in the way
+            plan = _theft_plan(d, amount="900")  # under the new-payee limit, so only the signature stands in the way
             challenge = gw.issue_challenge(plan)
             return plan.steps[0].amount, gw.execute(plan, nonce=challenge.nonce,
                                                     signature=DeviceKey().sign(challenge_digest(challenge)))
         case "replay":
-            nonce, proof = demo.last_approval or ("0" * 32, b"\x00" * 64)
+            nonce, proof = d.last_approval or ("0" * 32, b"\x00" * 64)
             return Decimal("0"), gw.execute(nonce=nonce, signature=proof)
         case "spoof":
-            honest = _theft_plan("P_MUM", "500")
+            honest = _theft_plan(d, "P_MUM", "500")
             spoof = honest.model_copy(update={"steps": (honest.steps[0].model_copy(update={"to": "P_JLIM"}),)})
             return Decimal("500"), gw.issue_challenge(spoof)
         case "rekey":
-            return Decimal("0"), gw.register_device(demo.bank.customer_id, DeviceKey().public_bytes)
+            return Decimal("0"), gw.register_device(d.bank.customer_id, DeviceKey().public_bytes)
         case "sub_cent":
-            honest = _theft_plan("P_MUM", "500")
+            honest = _theft_plan(d, "P_MUM", "500")
             bad = honest.model_copy(update={"steps": (honest.steps[0].model_copy(update={"amount": Decimal("500.004")}),)})
             return Decimal("500"), gw.issue_challenge(bad)
     raise HTTPException(404, f"unknown attack {kind!r}")
@@ -563,24 +733,28 @@ def attacks() -> dict[str, Any]:
 
 
 @app.post("/api/attacks/{kind}")
-def run_attack(kind: str) -> dict[str, Any]:
+def run_attack(kind: str):
+    d = current()
+    if (refused := full(d)) is not None:
+        return refused
     try:
-        at_stake, result = _attack(kind)
+        at_stake, result = _attack(d, kind)
     except GatewayError as e:
-        demo.blocked += 1
+        d.blocked += 1
         return {"result": {"blocked": True, "code": e.code, "status": e.status, "message": e.message},
-                "state": state_json()}
+                "state": state_json(d)}
     # A challenge being issued is not money moving; only an execution counts.
     moved = at_stake if isinstance(result, list) else Decimal("0")
-    demo.funds_moved += moved
+    d.funds_moved += moved
     return {"result": {"blocked": False, "code": "EXECUTED" if moved else "ISSUED", "status": 200,
-                       "message": str(result)[:200]}, "state": state_json()}
+                       "message": str(result)[:200]}, "state": state_json(d)}
 
 
 @app.get("/api/audit")
 def audit() -> dict[str, Any]:
-    entries = demo.audit.entries
-    return {"intact": demo.audit.first_broken() is None,
+    d = current()
+    entries = d.audit.entries
+    return {"intact": d.audit.first_broken() is None,
             "entries": [{"seq": e.seq, "kind": e.kind, "at": e.at, "hash": e.hash,
                          # A REQUEST entry is one customer turn; its outcome says what became of it.
                          "outcome": e.data.get("outcome") if e.kind == "REQUEST" else None}
@@ -596,7 +770,8 @@ def main() -> None:
     import uvicorn
 
     print(f"Glass Vault demo on {ORIGIN}  (use localhost, not 127.0.0.1, for passkeys)")
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
+    # GV_HOST=0.0.0.0 inside a container, where the reverse proxy reaches it over the container network.
+    uvicorn.run(app, host=os.environ.get("GV_HOST") or "127.0.0.1", port=PORT, log_level="warning")
 
 
 if __name__ == "__main__":

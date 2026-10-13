@@ -96,6 +96,13 @@ GV_VALIDATOR_API_KEY=...
 GV_VALIDATOR_MODEL=hy3
 ```
 
+### Hosting it
+
+The live demo for judges runs in a container on a Tencent Cloud Lighthouse server in
+Singapore, behind a password, with a demo of its own for each visitor and an hourly cap on
+paid calls, so a public link cannot run up the API bill. How it is set up and deployed:
+[deploy/README.md](deploy/README.md).
+
 ### Benchmark
 
 ```bash
@@ -149,6 +156,7 @@ case. Full scorecards are in `evals/results/`.
 | `services/` | FastAPI gateway service with WebAuthn passkeys | gateway |
 | `web/`, `demo.py` | Demo server, customer app and security console; CLI demo | demo |
 | `rogue.py`, `evals/` | Rogue-AI attacks and the benchmark | testing |
+| `deploy/` | Container, reverse-proxy site and deploy script for the hosted demo | demo |
 
 ## Built with
 
