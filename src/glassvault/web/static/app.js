@@ -39,9 +39,12 @@ async function api(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.message || res.statusText), data);
+  if (!res.ok) throw Object.assign(new Error(data.message || res.statusText), { status: res.status }, data);
   return data;
 }
+
+// "409 NONCE_CONSUMED" for the server's refusals; the error's name (e.g. "TypeError") otherwise.
+const errLabel = (err) => (err.code ? `${err.status} ${err.code}` : err.name);
 
 // ---------------------------------------------------------------------------
 // Chat rendering
@@ -356,13 +359,22 @@ async function approveChallenge(o, card) {
   const btn = card.querySelector(".approve");
   const passkey = btn.dataset.mode === "passkey";
   btn.disabled = true;
+  card.dataset.busy = "1";
+  try {
+    await signChallenge(o, card, btn, passkey);
+  } finally {
+    delete card.dataset.busy;
+  }
+}
+
+async function signChallenge(o, card, btn, passkey) {
   if (passkey && !o.webauthn) {
     // Shown before Face ID was set up, and its options did not arrive then: fetch them, and let
     // the next tap start Face ID, which some browsers only allow straight after a tap.
     try {
       await loadApprovalOptions(o);
     } catch (err) {
-      addMsg("refused", `Not sent: ${err.status} ${err.code}. ${err.message || ""}`);
+      addMsg("refused", `Not sent: ${errLabel(err)}. ${err.message || ""}`);
     }
     btn.disabled = false;
     return;
@@ -388,7 +400,7 @@ async function approveChallenge(o, card) {
   } catch (err) {
     await faceId(false);
     btn.disabled = false;
-    const code = err.code ? `${err.status} ${err.code}` : err.name;
+    const code = errLabel(err);
     addMsg("refused", `Not sent: ${code}. ${err.message || ""}`);
     renderStages(o.trace, { signature: { stage: "signature", ok: false, detail: code } });
   }
@@ -407,6 +419,12 @@ async function approveChallenge(o, card) {
 let platformPasskey = false; // this device can make a passkey with its own biometrics, here
 let enrolDeclined = false; // setting up Face ID failed or was cancelled in this demo
 const openConfirms = new Map(); // card -> outcome, for confirmations still waiting for approval
+let demoGen = 0; // bumped by Reset: a setup that finishes afterwards belongs to the old demo
+
+// Tabs of one visitor share a demo (and the server keeps only its latest registration), so each
+// tells the others when Face ID is set up or the demo reset; none then sets up Face ID with
+// options the server has dropped, which could replace the passkey the bank accepted.
+const passkeyChannel = "BroadcastChannel" in window ? new BroadcastChannel("glassvault-passkey") : null;
 
 // Whether this device has Face ID, Touch ID or Windows Hello for passkeys, on the host they are
 // made for (a local run opened at 127.0.0.1 rather than localhost cannot make one).
@@ -444,7 +462,7 @@ function setApproveButton(card) {
   else if (mode === "enrol") twoLines("Set up Face ID", "then approve with it");
   else if (mode === "simulated") twoLines("Approve", "simulated Face ID");
   else approve.textContent = "Set up Face ID first";
-  approve.disabled = mode === "none";
+  approve.disabled = mode === "none" || card.dataset.busy === "1";
 }
 
 // A confirmation rendered before the passkey existed came without options for it to sign.
@@ -502,7 +520,7 @@ async function enrolPasskey() {
     enrolment = null; // one ceremony per set of options
     enrolGen++;
     const cred = await navigator.credentials.create({ publicKey: creationOptions(options) });
-    const s = await api("/api/passkey/register/verify", {
+    const { state: s } = await api("/api/passkey/register/verify", {
       credential: {
         id: cred.id,
         rawId: bufToB64url(cred.rawId),
@@ -516,43 +534,98 @@ async function enrolPasskey() {
         },
       },
     });
-    renderState(s.state);
+    return s;
   } finally {
     enrolling = false;
   }
 }
 
+// Back in step with the server: after another tab set up Face ID or reset the demo, or on coming
+// back to this page. Not while this page is setting up Face ID or signing: their own answers
+// carry the state, and an older one arriving after them would undo it.
+async function resync() {
+  if (enrolling || document.querySelector(".confirm[data-busy]")) return;
+  const gen = demoGen;
+  enrolment = null; // another tab may have fetched options since, voiding these
+  enrolGen++;
+  let s;
+  try {
+    s = await api("/api/state");
+  } catch {
+    return;
+  }
+  if (gen !== demoGen || enrolling) return;
+  renderState(s);
+  await refreshConfirms();
+  if ([...openConfirms.keys()].some((c) => c.querySelector(".approve")?.dataset.mode === "enrol")) prepareEnrolment();
+}
+
+passkeyChannel?.addEventListener("message", (e) => {
+  if (e.data === "reset") {
+    demoGen++;
+    enrolDeclined = false;
+  }
+  resync();
+});
+
 // Cancelled, refused by this device, or not accepted by the bank: from now on confirmations offer
-// the simulated key, and the header chip can try again.
-async function enrolFailed(err) {
-  if (err.code === "DEVICE_ALREADY_REGISTERED") {
-    // Set up meanwhile (in another tab of this demo): nothing failed.
-    renderState(await api("/api/state"));
+// the simulated key, and the header chip can try again. Unless Face ID turns out to be set up
+// already (in another tab of this demo): then cards sign with it.
+async function enrolFailed(err, gen) {
+  let s = null;
+  try {
+    s = await api("/api/state");
+  } catch {
+    // keep what this page knows
+  }
+  if (gen !== demoGen) return;
+  if (s) renderState(s);
+  if (state?.passkey?.registered) {
     await refreshConfirms();
+    addMsg("system", err.code === "DEVICE_ALREADY_REGISTERED" ? "Face ID is already set up for this demo."
+      : "Face ID was set up for this demo in another tab. If this device saved a second passkey just now, tap Reset and set it up again.");
     return;
   }
   enrolDeclined = true;
   await refreshConfirms();
   const saved = err.code === "ENROLMENT_REJECTED"
     ? " Your device may have saved a passkey the bank did not accept; you can delete it." : "";
-  addMsg("system", `Face ID was not set up (${err.code || err.name}).${saved} ` +
+  addMsg("system", `Face ID was not set up (${errLabel(err)}).${saved} ` +
     'Approve with the simulated key, or tap "Set up Face ID" above to try again.');
   refreshAudit();
+}
+
+// Set up Face ID; false if the demo was reset meanwhile (the result belongs to the old one).
+async function enrolAndShow() {
+  const gen = demoGen;
+  let s;
+  try {
+    s = await enrolPasskey();
+  } catch (err) {
+    await enrolFailed(err, gen);
+    return false;
+  }
+  if (gen !== demoGen) return false;
+  renderState(s);
+  passkeyChannel?.postMessage("enrolled");
+  await refreshConfirms();
+  refreshAudit();
+  return true;
 }
 
 // "Set up Face ID" on a confirmation: set the passkey up, then the same button signs with it.
 async function enrolFromConfirm(o, card) {
   if (enrolling) return;
   card.querySelector(".approve").disabled = true;
+  card.dataset.busy = "1";
+  let ok;
   try {
-    await enrolPasskey();
-  } catch (err) {
-    await enrolFailed(err);
-    return;
+    ok = await enrolAndShow();
+  } finally {
+    delete card.dataset.busy;
+    setApproveButton(card);
   }
-  await refreshConfirms();
-  addMsg("system", "Face ID is set up on this device. Tap Approve with Face ID to sign this payment.");
-  refreshAudit();
+  if (ok) addMsg("system", "Face ID is set up on this device. Tap Approve with Face ID to sign this payment.");
 }
 
 const b64urlToBuf = (s) => {
@@ -596,15 +669,7 @@ function assertionToJSON(cred) {
 
 async function registerPasskey() {
   if (state?.passkey?.registered || enrolling) return;
-  try {
-    await enrolPasskey();
-  } catch (err) {
-    await enrolFailed(err);
-    return;
-  }
-  await refreshConfirms(); // a confirmation already on screen now signs with Face ID too
-  addMsg("system", "Face ID is set up. Only this device can approve payments now.");
-  refreshAudit();
+  if (await enrolAndShow()) addMsg("system", "Face ID is set up. Only this device can approve payments now.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,18 +1217,18 @@ chat.addEventListener("click", (e) => {
   }
 });
 $("#passkey-btn").addEventListener("click", registerPasskey);
-// Back on the page (a phone unlocked, a tab switched back to): an open "Set up Face ID" may need
-// fresh options.
-const freshenEnrolment = () => {
-  if (document.visibilityState !== "visible") return;
-  if ([...openConfirms.keys()].some((c) => c.querySelector(".approve")?.dataset.mode === "enrol")) prepareEnrolment();
-};
-document.addEventListener("visibilitychange", freshenEnrolment);
-window.addEventListener("pageshow", freshenEnrolment);
+// Back on the page (a phone unlocked, a tab or window switched back to): catch up with the
+// server, and fetch fresh options for an open "Set up Face ID".
+const onReturn = () => document.visibilityState === "visible" && state && resync();
+document.addEventListener("visibilitychange", onReturn);
+window.addEventListener("pageshow", onReturn);
+window.addEventListener("focus", onReturn);
 $("#rogue-toggle").addEventListener("change", () => setRogue());
 $("#rogue-attack").addEventListener("change", () => $("#rogue-toggle").checked && setRogue(true));
 $("#reset").addEventListener("click", async () => {
+  demoGen++; // a setup answered after this belongs to the old demo
   const { state: s } = await api("/api/reset", {});
+  demoGen++;
   renderState(s);
   chat.querySelectorAll(".msg:not(:first-child)").forEach((m) => m.remove());
   // A new demo: no registration open, and Face ID is offered again.
@@ -1172,6 +1237,7 @@ $("#reset").addEventListener("click", async () => {
   enrolFetch = null;
   enrolGen++;
   enrolDeclined = false;
+  passkeyChannel?.postMessage("reset");
   renderStages([]);
   renderDiff(null);
   $("#attack-log").innerHTML = "";

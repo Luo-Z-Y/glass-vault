@@ -100,6 +100,9 @@ def test_face_id_set_up_from_a_confirmation_can_sign_that_confirmation(monkeypat
         state = client.post("/api/passkey/register/verify",
                             json={"credential": phone.create(options, **site)}).json()["state"]
         assert state["passkey"] == {"registered": True, "simulated_allowed": False, "rp_id": server.RP_ID}
+        # Another tab's late setup is told the passkey exists, not that its own was rejected.
+        late = client.post("/api/passkey/register/verify", json={"credential": SoftAuthenticator().create(options, **site)})
+        assert late.status_code == 409 and late.json()["code"] == "DEVICE_ALREADY_REGISTERED"
 
         unknown = client.post("/api/passkey/approval-options", json={"nonce": "no-such-nonce"})
         assert unknown.status_code == 404 and unknown.json()["code"] == "UNKNOWN_CHALLENGE"

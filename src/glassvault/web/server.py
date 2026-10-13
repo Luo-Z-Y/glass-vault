@@ -22,7 +22,6 @@ demo of their own and cap its paid calls per hour: see "Hosting" below.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import os
 import re
 import secrets
@@ -143,17 +142,14 @@ def _dotenv_has_key() -> bool:
                                 for line in env.read_text().splitlines())
 
 
-# Passkey user handles are derived from the visitor id, so they stay the same across Reset and
-# eviction for as long as the visitor's cookie (and this process) lasts: setting up Face ID again
-# replaces the passkey on the visitor's phone instead of saving another one. Keyed, so a handle
-# says nothing about the visitor id. The shared demo (no visitor id) keeps random handles.
-_HANDLE_KEY = secrets.token_bytes(32)
-
-
+# Passkey user handles are derived from the visitor id (a 192-bit secret the server made), so
+# they stay the same across Reset, eviction and redeploys for as long as the visitor's cookie
+# lasts: setting up Face ID again replaces the passkey on the visitor's phone instead of saving
+# another. Hashed with a label, so a handle says nothing about the visitor id. The shared demo
+# (no visitor id) uses one fixed handle, so Reset replaces the passkey on a local run too.
 def _passkey_handles(visitor: str | None):
-    if visitor is None:
-        return None
-    return lambda customer: hmac.new(_HANDLE_KEY, f"{visitor}\0{customer}".encode(), hashlib.sha256).digest()
+    seed = "shared" if visitor is None else visitor
+    return lambda customer: hashlib.sha256(f"glass-vault passkey handle\0{seed}\0{customer}".encode()).digest()
 
 
 def new_demo(visitor: str | None = None) -> Demo:
@@ -691,6 +687,10 @@ class RegisterRequest(BaseModel):
 @app.post("/api/passkey/register/verify")
 def passkey_verify(req: RegisterRequest):
     d = current()
+    if d.verifier.has_passkey(d.bank.customer_id):
+        # Set up meanwhile, in another tab of this demo: say so plainly rather than as a rejection.
+        return JSONResponse({"code": "DEVICE_ALREADY_REGISTERED", "status": 409,
+                             "message": "a passkey is already enrolled; reset the demo to enrol again"}, 409)
     try:
         d.verifier.webauthn.verify_registration(d.bank.customer_id, req.credential)
     except Exception as e:  # EnrolmentError and friends

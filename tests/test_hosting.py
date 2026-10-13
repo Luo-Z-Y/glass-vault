@@ -215,3 +215,5 @@ def test_a_visitors_passkey_handle_survives_reset_but_differs_between_visitors(s
         first = handle(a)
         a.post("/api/reset", json={})
         assert handle(a) == first != handle(b)
+        monkeypatch.setattr(server, "_sessions", OrderedDict())  # a redeploy: every demo gone
+        assert handle(a) == first  # and the same handle afterwards
