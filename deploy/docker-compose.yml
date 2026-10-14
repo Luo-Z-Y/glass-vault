@@ -21,7 +21,8 @@ services:
       GV_ORIGIN: https://${GLASSVAULT_HOST:?set GLASSVAULT_HOST in .env}
       GV_RP_ID: ${GLASSVAULT_HOST}
       GV_SESSIONS: "1"
-      GV_ACCESS_PASSWORD: ${GV_ACCESS_PASSWORD:?set GV_ACCESS_PASSWORD in .env}
+      # Optional: empty (the default since 14 October 2026) means no sign-in; the hourly cap still applies.
+      GV_ACCESS_PASSWORD: ${GV_ACCESS_PASSWORD:-}
       GV_PAID_CALLS_PER_HOUR: ${GV_PAID_CALLS_PER_HOUR:-300}
     expose:
       - "8000"

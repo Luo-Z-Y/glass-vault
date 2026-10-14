@@ -38,18 +38,16 @@ if [ "$mode" = "--init" ]; then
     [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "give the server by IP, or set GLASSVAULT_HOST" >&2; exit 1; }
     host="${ip//./-}.sslip.io"
   fi
+  # No sign-in unless your local .env sets GV_ACCESS_PASSWORD (deploy/README.md).
   password=$(sed -n 's/^GV_ACCESS_PASSWORD=//p' .env | tail -n 1)
-  if [ -z "$password" ]; then
-    password=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-16)
-    printf '\n# Password for the hosted demo (deploy/README.md); the user name is "judge".\nGV_ACCESS_PASSWORD=%s\n' "$password" >> .env
-  fi
   {
     grep -v -E '^(GLASSVAULT_HOST|GV_ACCESS_PASSWORD|GV_PAID_CALLS_PER_HOUR|GV_ORIGIN|GV_RP_ID|GV_SESSIONS|GV_HOST|GV_PORT|PORT)=' .env
     printf '\n# Hosting (deploy/deploy.sh --init)\nGLASSVAULT_HOST=%s\nGV_ACCESS_PASSWORD=%s\nGV_PAID_CALLS_PER_HOUR=300\n' \
       "$host" "$password"
   } | remote "set -e; umask 077; sudo install -d -m 0700 $root; sudo tee $root/.env >/dev/null; sudo chmod 0600 $root/.env"
   echo "Wrote $root/.env on the server for https://$host"
-  echo "Sign in as judge; the password is GV_ACCESS_PASSWORD in your local .env. Now deploy to apply it."
+  if [ -n "$password" ]; then echo "Sign in as judge with GV_ACCESS_PASSWORD from your local .env."; else echo "No sign-in: the demo is open to anyone with the link."; fi
+  echo "Now deploy to apply it."
   exit 0
 fi
 
@@ -108,5 +106,10 @@ if [ "$code" != 200 ]; then
   exit 1
 fi
 gate=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://$host/")
-[ "$gate" = 401 ] || { echo "https://$host/ answered $gate, not 401: the password is not being asked for" >&2; exit 1; }
-echo "Deployed $sha: https://$host (user judge, password GV_ACCESS_PASSWORD in your .env)"
+if remote "sudo grep -q '^GV_ACCESS_PASSWORD=.' $root/.env" </dev/null; then
+  [ "$gate" = 401 ] || { echo "https://$host/ answered $gate, not 401: the password is not being asked for" >&2; exit 1; }
+  echo "Deployed $sha: https://$host (user judge, password GV_ACCESS_PASSWORD in your .env)"
+else
+  [ "$gate" = 200 ] || { echo "https://$host/ answered $gate, not 200" >&2; exit 1; }
+  echo "Deployed $sha: https://$host (open, no sign-in)"
+fi

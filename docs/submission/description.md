@@ -14,7 +14,7 @@ The AI drafts. Only your face moves money.
 
 https://glassvault.luo-zy.com
 
-Paste the URL only. It is the live demo, which asks for a sign-in so a public link cannot run up the API bill: user `judge`, password `QgSQnHE8CRdvy7Cm`. The last line of the Project Description repeats both, with the GitHub link to the source code that this field used to hold.
+Paste the URL only. It is the live demo, open with no sign-in (an hourly cap on paid calls bounds the API bill). The last line of the Project Description repeats it, with the GitHub link to the source code.
 
 ## Project Description
 
@@ -79,7 +79,7 @@ Feasibility: standard passkeys (FIDO2 / WebAuthn); the gateway also runs as its 
 - Safety is measured: a naive-agent baseline, two held-out test sets we did not write, and a live rogue-AI mode.
 - Runs end to end with no keys (offline stand-ins), so judges can run the whole flow themselves.
 
-Live demo: https://glassvault.luo-zy.com (user judge / password QgSQnHE8CRdvy7Cm). Source code: https://github.com/Luo-Z-Y/glass-vault
+Live demo: https://glassvault.luo-zy.com (no sign-in). Source code: https://github.com/Luo-Z-Y/glass-vault
 ```
 
 ## WorkBuddy/CodeBuddy/Miora Conversation History (upload)

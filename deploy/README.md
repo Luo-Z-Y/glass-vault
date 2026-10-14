@@ -1,7 +1,7 @@
 # Hosting the demo
 
 How the live demo for judges runs: on the Tencent Cloud Lighthouse server that already hosts
-FirstRoll (Singapore, 2 vCPU, 2 GB), at `https://glassvault.luo-zy.com`, behind a password.
+FirstRoll (Singapore, 2 vCPU, 2 GB), at `https://glassvault.luo-zy.com`, open to anyone with the link (no sign-in since 14 October 2026).
 
 ```
 judge's browser ──HTTPS──> FirstRoll's Caddy (ports 80/443, Let's Encrypt)
@@ -27,12 +27,10 @@ Every chat turn calls DeepSeek and Hunyuan, and voice and Help call Tencent RTC 
 your credit. So the hosted server turns on settings the local demo leaves off
 (`src/glassvault/web/server.py`, "Hosting"):
 
-- **A password** (`GV_ACCESS_PASSWORD`): every request needs it, as HTTP basic auth with the user
-  name `judge`. Both end the submission's Project Description (`docs/submission/description.md`),
-  so they are as public as the submission and this repository: the password keeps out bots and
-  passers-by, not a determined visitor, and the cap below and the provider limits bound what one
-  could spend. To change it after judging, delete `GV_ACCESS_PASSWORD` from your local `.env`,
-  then rerun `--init` and deploy.
+- **An optional password** (`GV_ACCESS_PASSWORD`): off since 14 October 2026, so judges open the
+  link with no sign-in. Set it in your local `.env` (HTTP basic auth, user name `judge`), rerun
+  `--init` and deploy to turn it back on. Without it, the cap below and the provider limits are
+  what bound the spend.
 - **A demo per visitor** (`GV_SESSIONS=1`): each browser gets its own bank, conversation, rogue
   switch and passkey, so judges trying it at the same time never see each other's actions. The 16
   most recently used demos are kept; requests without the visitor cookie never displace one.
@@ -42,7 +40,7 @@ your credit. So the hosted server turns on settings the local demo leaves off
 - Always on: request bodies over 4 MB are refused, writes from other sites are refused, and a demo
   whose audit log passes 2,000 entries asks to be reset.
 
-Also set a spending limit with each provider, because a leaked password could still spend up to
+Also set a spending limit with each provider, because anyone with the link can spend up to
 the hourly cap:
 
 - **DeepSeek:** prepaid, so keep only a few dollars on the account; calls stop when it is empty.
@@ -71,8 +69,8 @@ Changing the host means changing it in FirstRoll's Caddyfile (a FirstRoll releas
    ```
 
    This copies your `.env` (the API keys) to `/opt/glassvault/.env` (root, mode 0600) and adds
-   the host name, a new password (saved to your local `.env` as `GV_ACCESS_PASSWORD`, never
-   printed) and the hourly cap. Rerunning it replaces the server's settings; deploy afterwards
+   the host name, `GV_ACCESS_PASSWORD` from your local `.env` if you set one (empty means no
+   sign-in) and the hourly cap. Rerunning it replaces the server's settings; deploy afterwards
    to apply them.
 3. **Deploy**, as below.
 
@@ -86,7 +84,7 @@ It builds the committed code (git `HEAD`; never the working tree or `.env`) for 
 your machine with Docker, loads the image on the server (which never builds, so FirstRoll keeps
 its CPU), installs `docker-compose.yml` in `/opt/glassvault` and starts the container. If the
 new container does not become healthy, the previous image is started again. Finally it checks
-from your machine that `/healthz` answers and everything else asks for the password; the very
+from your machine that `/healthz` answers and the site opens (or, with a password set, asks for it); the very
 first visit waits a few seconds for the certificate.
 
 A deploy restarts the container, which clears every visitor's demo, so avoid deploying while

@@ -22,7 +22,7 @@ switch the AI to rogue mode and show it still cannot move a cent.
 
 | To check | Where |
 |---|---|
-| Try it live | https://glassvault.luo-zy.com: sign in as `judge` with the password at the end of the Project Description in [docs/submission/description.md](docs/submission/description.md) |
+| Try it live | https://glassvault.luo-zy.com (no sign-in) |
 | The AI cannot move money | `gateway.py` is the only code that changes balances; the pipeline reaches it through `GatewayPort`, which has no execute method. Try it: `uv run python -i scripts/playground.py` |
 | Every DBS requirement and the layer that meets it | Section 3 of [docs/submission/description.md](docs/submission/description.md) |
 | Which Tencent Cloud products, and why | [Tencent Cloud in Glass Vault](#tencent-cloud-in-glass-vault) |
@@ -100,7 +100,7 @@ GV_VALIDATOR_EXTRA_BODY={"thinking": {"type": "disabled"}}
 ### Hosting it
 
 The live demo for judges runs in a container on a Tencent Cloud Lighthouse server in
-Singapore, behind a password, with a demo of its own for each visitor and an hourly cap on
+Singapore, open to anyone with the link, with a demo of its own for each visitor and an hourly cap on
 paid calls, so a public link cannot run up the API bill. How it is set up and deployed:
 [deploy/README.md](deploy/README.md).
 

@@ -190,7 +190,7 @@ async def revalidate_ui(request: Request, call_next):
 # All off unless set, so a local run behaves as before. A public deployment sets them
 # (deploy/README.md): every call to a model, Tencent RTC or ADP spends the account's credit.
 #
-#   GV_ACCESS_PASSWORD      every request needs it (HTTP basic auth, user GV_ACCESS_USER or "judge")
+#   GV_ACCESS_PASSWORD      if set, every request needs it (HTTP basic auth, user GV_ACCESS_USER or "judge")
 #   GV_SESSIONS=1           each visitor (a cookie) gets a demo of their own, so one visitor's
 #                           rogue mode, passkey or payments never show up in another's
 #   GV_PAID_CALLS_PER_HOUR  at most this many calls to a model, Tencent RTC or ADP, all visitors
