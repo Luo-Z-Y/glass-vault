@@ -15,8 +15,8 @@ Help, the bank FAQ assistant, is a Tencent ADP knowledge-Q&A app; without it, He
 answers from the built-in FAQ. Help stands apart from the payment conversation: its
 words never enter the dialogue, the audit log or the bank voice.
 
-Hosted for others (deploy/README.md), it can ask for a password, give each visitor a
-demo of their own and cap its paid calls per hour: see "Hosting" below.
+Hosted for others (deploy/README.md), it can give each visitor a demo of their own and
+cap its paid calls per hour: see "Hosting" below. It asks for no sign-in.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ import re
 import secrets
 import threading
 import time
-from base64 import b64decode
 from collections import OrderedDict, deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -185,12 +184,11 @@ async def revalidate_ui(request: Request, call_next):
     return response
 
 
-# --- Hosting: who may visit, whose demo, and how much it may spend -------------------
+# --- Hosting: whose demo, and how much it may spend ----------------------------------
 #
 # All off unless set, so a local run behaves as before. A public deployment sets them
 # (deploy/README.md): every call to a model, Tencent RTC or ADP spends the account's credit.
 #
-#   GV_ACCESS_PASSWORD      every request needs it (HTTP basic auth, user GV_ACCESS_USER or "judge")
 #   GV_SESSIONS=1           each visitor (a cookie) gets a demo of their own, so one visitor's
 #                           rogue mode, passkey or payments never show up in another's
 #   GV_PAID_CALLS_PER_HOUR  at most this many calls to a model, Tencent RTC or ADP, all visitors
@@ -199,8 +197,6 @@ async def revalidate_ui(request: Request, call_next):
 # Always on: request bodies over 4 MB are refused (a recording is at most 2 MB), and a write to
 # /api/ from another site is refused (see _cross_site).
 
-ACCESS_USER = os.environ.get("GV_ACCESS_USER") or "judge"
-ACCESS_PASSWORD = os.environ.get("GV_ACCESS_PASSWORD") or ""
 SESSIONS = os.environ.get("GV_SESSIONS") == "1"
 MAX_SESSIONS = int(os.environ.get("GV_MAX_SESSIONS") or "16")  # the least recently used demo goes first
 PAID_CALLS_PER_HOUR = int(os.environ.get("GV_PAID_CALLS_PER_HOUR") or "0")  # 0: no cap
@@ -259,19 +255,6 @@ def replace_demo() -> Demo:
         return d
 
 
-def _authorised(request: Request) -> bool:
-    scheme, _, value = request.headers.get("authorization", "").partition(" ")
-    if scheme.lower() != "basic":
-        return False
-    try:
-        user, _, password = b64decode(value, validate=True).decode("utf-8").partition(":")
-    except (ValueError, UnicodeDecodeError):
-        return False
-    # Both compared in constant time, and both always compared.
-    return secrets.compare_digest(user.encode(), ACCESS_USER.encode()) & \
-        secrets.compare_digest(password.encode(), ACCESS_PASSWORD.encode())
-
-
 def spend() -> JSONResponse | None:
     """Count one call to a paid service, just before it is made; a refusal if the hour's budget is spent."""
     if not PAID_CALLS_PER_HOUR:
@@ -295,12 +278,9 @@ def full(d: Demo) -> JSONResponse | None:
 
 @app.middleware("http")
 async def hosting(request: Request, call_next):
-    """Access, cross-site writes, then the visitor's demo (see above). /healthz is open."""
+    """Cross-site writes, then the visitor's demo (see above). /healthz is for the health check."""
     if request.url.path == "/healthz":
         return JSONResponse({"status": "ok"})
-    if ACCESS_PASSWORD and not _authorised(request):
-        return Response("Glass Vault demo: sign in with the user name and password you were given.", 401,
-                        {"WWW-Authenticate": 'Basic realm="Glass Vault demo", charset="UTF-8"'}, "text/plain")
     if request.method != "GET" and request.url.path.startswith("/api/") and \
             (refused := _cross_site(request, "this demo")) is not None:
         return refused
