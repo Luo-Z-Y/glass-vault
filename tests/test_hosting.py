@@ -1,6 +1,5 @@
-"""Hosting the demo for others: a password, a demo per visitor, and a cap on paid calls."""
+"""Hosting the demo for others: no sign-in, a demo per visitor, and a cap on paid calls."""
 
-import base64
 import importlib
 from collections import OrderedDict, deque
 
@@ -16,7 +15,6 @@ def server(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     server = importlib.import_module("glassvault.web.server")
     monkeypatch.setattr(server, "demo", server.new_demo())
-    monkeypatch.setattr(server, "ACCESS_PASSWORD", "")
     monkeypatch.setattr(server, "SESSIONS", False)
     monkeypatch.setattr(server, "PAID_CALLS_PER_HOUR", 0)
     monkeypatch.setattr(server, "_sessions", OrderedDict())
@@ -24,11 +22,7 @@ def server(monkeypatch, tmp_path):
     return server
 
 
-def basic(user: str, password: str) -> dict[str, str]:
-    return {"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()}
-
-
-def test_by_default_nothing_changes_one_shared_demo_and_no_password(server):
+def test_by_default_nothing_changes_one_shared_demo(server):
     with TestClient(server.app) as a, TestClient(server.app) as b:
         assert a.get("/").status_code == 200
         a.post("/api/rogue", json={"attack": "extra_transfer"})
@@ -36,19 +30,13 @@ def test_by_default_nothing_changes_one_shared_demo_and_no_password(server):
         assert "gv_visitor" not in a.cookies
 
 
-def test_with_a_password_every_request_needs_it(server, monkeypatch):
-    monkeypatch.setattr(server, "ACCESS_PASSWORD", "open sesame")
+def test_anyone_with_the_link_gets_in_and_the_health_check_answers(server, monkeypatch):
+    monkeypatch.setattr(server, "SESSIONS", True)  # as hosted
     with TestClient(server.app) as client:
         for path in ("/", "/api/state", "/static/app.js"):
-            refused = client.get(path)
-            assert refused.status_code == 401
-            assert refused.headers["www-authenticate"].startswith('Basic realm="Glass Vault demo"')
-        assert client.post("/api/message", json={"text": "Send mum 300"}).status_code == 401
-        assert client.get("/api/state", headers=basic("judge", "wrong")).status_code == 401
-        assert client.get("/api/state", headers=basic("admin", "open sesame")).status_code == 401
-        assert client.get("/api/state", headers={"Authorization": "Basic not-base64!"}).status_code == 401
-        assert client.get("/api/state", headers={"Authorization": "Bearer open sesame"}).status_code == 401
-        assert client.get("/api/state", headers=basic("judge", "open sesame")).status_code == 200
+            opened = client.get(path)
+            assert opened.status_code == 200 and "www-authenticate" not in opened.headers
+        assert client.post("/api/message", json={"text": "Send mum 300"}).status_code == 200
         assert client.get("/healthz").json() == {"status": "ok"}  # for the container's health check
 
 

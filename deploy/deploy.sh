@@ -9,14 +9,13 @@
 #
 # --init copies your local .env (the API keys) to /opt/glassvault/.env (root, mode 0600) and adds
 # the hosting settings: GLASSVAULT_HOST, the server's IP as an sslip.io name (or the
-# GLASSVAULT_HOST you set when running this); GV_ACCESS_PASSWORD, a new random password saved to
-# your local .env too (it is never printed); and GV_PAID_CALLS_PER_HOUR. Deploy afterwards to
+# GLASSVAULT_HOST you set when running this), and GV_PAID_CALLS_PER_HOUR. Deploy afterwards to
 # apply it.
 #
 # A deploy builds git HEAD (never the working tree or .env) for linux/amd64 on this machine, loads
 # the image on the server, which never builds, installs docker-compose.yml and starts the
 # container. If it does not become healthy, the previous image is started again. Then it checks
-# the site from here: /healthz answers and everything else asks for the password. The site is a
+# the site from here: /healthz answers and the page opens, with no sign-in. The site is a
 # block in FirstRoll's Caddyfile, released with FirstRoll; this script never touches FirstRoll.
 set -euo pipefail
 
@@ -38,15 +37,11 @@ if [ "$mode" = "--init" ]; then
     [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "give the server by IP, or set GLASSVAULT_HOST" >&2; exit 1; }
     host="${ip//./-}.sslip.io"
   fi
-  # No sign-in unless your local .env sets GV_ACCESS_PASSWORD (deploy/README.md).
-  password=$(sed -n 's/^GV_ACCESS_PASSWORD=//p' .env | tail -n 1)
   {
-    grep -v -E '^(GLASSVAULT_HOST|GV_ACCESS_PASSWORD|GV_PAID_CALLS_PER_HOUR|GV_ORIGIN|GV_RP_ID|GV_SESSIONS|GV_HOST|GV_PORT|PORT)=' .env
-    printf '\n# Hosting (deploy/deploy.sh --init)\nGLASSVAULT_HOST=%s\nGV_ACCESS_PASSWORD=%s\nGV_PAID_CALLS_PER_HOUR=300\n' \
-      "$host" "$password"
+    grep -v -E '^(GLASSVAULT_HOST|GV_PAID_CALLS_PER_HOUR|GV_ORIGIN|GV_RP_ID|GV_SESSIONS|GV_HOST|GV_PORT|PORT)=' .env
+    printf '\n# Hosting (deploy/deploy.sh --init)\nGLASSVAULT_HOST=%s\nGV_PAID_CALLS_PER_HOUR=300\n' "$host"
   } | remote "set -e; umask 077; sudo install -d -m 0700 $root; sudo tee $root/.env >/dev/null; sudo chmod 0600 $root/.env"
-  echo "Wrote $root/.env on the server for https://$host"
-  if [ -n "$password" ]; then echo "Sign in as judge with GV_ACCESS_PASSWORD from your local .env."; else echo "No sign-in: the demo is open to anyone with the link."; fi
+  echo "Wrote $root/.env on the server for https://$host (open to anyone with the link)"
   echo "Now deploy to apply it."
   exit 0
 fi
@@ -105,11 +100,6 @@ if [ "$code" != 200 ]; then
   echo "has its certificate been issued? ssh $dest 'sudo docker logs firstroll-caddy-1 2>&1 | grep -i $host | tail'" >&2
   exit 1
 fi
-gate=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://$host/")
-if remote "sudo grep -q '^GV_ACCESS_PASSWORD=.' $root/.env" </dev/null; then
-  [ "$gate" = 401 ] || { echo "https://$host/ answered $gate, not 401: the password is not being asked for" >&2; exit 1; }
-  echo "Deployed $sha: https://$host (user judge, password GV_ACCESS_PASSWORD in your .env)"
-else
-  [ "$gate" = 200 ] || { echo "https://$host/ answered $gate, not 200" >&2; exit 1; }
-  echo "Deployed $sha: https://$host (open, no sign-in)"
-fi
+page=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://$host/")
+[ "$page" = 200 ] || { echo "https://$host/ answered $page, not 200" >&2; exit 1; }
+echo "Deployed $sha: https://$host (open, no sign-in)"

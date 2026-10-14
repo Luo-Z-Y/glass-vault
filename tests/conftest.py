@@ -39,7 +39,7 @@ def no_trtc(monkeypatch):
 @pytest.fixture(autouse=True)
 def restore_environment():
     """No test may leak environment variables into the next: the evals CLI loads .env into os.environ,
-    which would hand later tests the developer's keys and the hosted demo's password."""
+    which would hand later tests the developer's keys and settings."""
     import os
 
     saved = dict(os.environ)
