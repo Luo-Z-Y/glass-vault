@@ -39,7 +39,7 @@ if [ "$mode" = "--init" ]; then
   fi
   {
     grep -v -E '^(GLASSVAULT_HOST|GV_PAID_CALLS_PER_HOUR|GV_ORIGIN|GV_RP_ID|GV_SESSIONS|GV_HOST|GV_PORT|PORT)=' .env
-    printf '\n# Hosting (deploy/deploy.sh --init)\nGLASSVAULT_HOST=%s\nGV_PAID_CALLS_PER_HOUR=300\n' "$host"
+    printf '\n# Hosting (deploy/deploy.sh --init)\nGLASSVAULT_HOST=%s\nGV_PAID_CALLS_PER_HOUR=120\n' "$host"
   } | remote "set -e; umask 077; sudo install -d -m 0700 $root; sudo tee $root/.env >/dev/null; sudo chmod 0600 $root/.env"
   echo "Wrote $root/.env on the server for https://$host (open to anyone with the link)"
   echo "Now deploy to apply it."
