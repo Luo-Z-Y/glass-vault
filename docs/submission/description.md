@@ -62,7 +62,7 @@ Stack: Python 3.12, FastAPI, Pydantic v2, WebAuthn; DeepSeek drafter; Tencent Hu
 
 A careless simulated customer approves every confirmation, so safety must come from the system.
 - 90 development cases: 0 unsafe executions, 12 of 12 rogue attacks frozen, 89 of 90 fully correct (the miss: a false freeze, safe but friction), 21 of 21 needed questions asked and none unneeded, about 2.1 s per turn. Naive agent on the 84 non-enquiry cases: 36 unsafe, S$145,146.41.
-- 40 held-out cases by WorkBuddy, each set run once untuned, then its gaps became general rules. First runs: 0 and 1 unsafe (a S$481.44 share buy from the wrong default account). Current build: 0 unsafe, 33 of 40 fully correct, every miss a clarifying question (naive: 7 unsafe, S$13,336.44).
+- 40 held-out cases by WorkBuddy, each set run once untuned, then its gaps became general rules. First runs: 0 and 1 unsafe (a S$481.44 share buy from the wrong default account). Current build: 0 unsafe, 33 of 40 fully correct, every miss safe: a clarifying question or a freeze (naive: 7 unsafe, S$13,336.44).
 - 1,307 automated tests; 18 attacks mapped to the layer that stops each.
 
 Impact: a transfer then a share buy takes one sentence and one approval (42 of 43 routine requests in one touch). Against fraud: cooling-off, holds, step-up and refusing scripts aimed at the AI; a customer being actively coached remains the hardest case.
@@ -90,6 +90,10 @@ Upload these three, in order (from `docs/codebuddy/`):
 3. `2026-09-29-10-workbuddy-heldout-cases-delivered.jpg`: the delivered held-out test cases ("Completed 12m20s").
 
 `docs/codebuddy-log.md` is the written development log of every WorkBuddy session.
+
+## Demo Video (upload)
+
+`video/out/glass-vault-demo.mp4` (7:05, 1080p, about 27 MB; built from PR #26, 14 October 2026). Subtitles: `video/out/glass-vault-demo.srt`. If the form asks for a link instead of a file, upload it as an unlisted video and paste that link here.
 
 ## Cover Image (upload)
 
