@@ -84,17 +84,17 @@ payment chat or the bank voice.
 
 ### With a real LLM
 
-Copy `.env.example` to `.env` and add your key. The defaults use DeepSeek's own
-API, with `deepseek-flash` drafting and `deepseek-v4-pro` validating, and thinking
-mode off for both roles (in thinking mode DeepSeek rejects forced tool calls).
-A validator from a different model family makes its check more independent;
-our results below use Tencent Hunyuan Hy3 through OpenRouter (see
-`.env.example`). On Tencent Cloud International TokenHub, set:
+Copy `.env.example` to `.env` and add two keys: DeepSeek's (`GV_LLM_API_KEY`),
+for `deepseek-flash` drafting, and OpenRouter's (`GV_VALIDATOR_API_KEY`), for
+Tencent Hunyuan Hy3 validating. A validator from a different model family makes
+its check more independent, and these are the models behind our results below
+and the hosted demo. Thinking mode is off for both roles (in thinking mode
+DeepSeek rejects forced tool calls). `.env.example` also shows Hy3 on Tencent
+Cloud International TokenHub directly, and DeepSeek for both roles with one key:
 
 ```
-GV_VALIDATOR_BASE_URL=https://tokenhub-intl.tencentcloudmaas.com/v1
-GV_VALIDATOR_API_KEY=...
-GV_VALIDATOR_MODEL=hy3
+GV_VALIDATOR_MODEL=deepseek-v4-pro
+GV_VALIDATOR_EXTRA_BODY={"thinking": {"type": "disabled"}}
 ```
 
 ### Hosting it
