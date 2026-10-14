@@ -30,9 +30,9 @@ your credit. So the hosted server turns on settings the local demo leaves off
 - **A demo per visitor** (`GV_SESSIONS=1`): each browser gets its own bank, conversation, rogue
   switch and passkey, so judges trying it at the same time never see each other's actions. The 16
   most recently used demos are kept; requests without the visitor cookie never displace one.
-- **A cap on paid calls** (`GV_PAID_CALLS_PER_HOUR`, 300 by default): live model turns, speech
+- **A cap on paid calls** (`GV_PAID_CALLS_PER_HOUR`, 120 by default): live model turns, speech
   synthesis, speech recognition and ADP answers together, for all visitors. Requests that spend
-  nothing are not counted. A judge's full tour uses about 30.
+  nothing are not counted. A judge's full tour uses about 30, so about four tours fit in an hour.
 - Always on: request bodies over 4 MB are refused, writes from other sites are refused, and a demo
   whose audit log passes 2,000 entries asks to be reset.
 
