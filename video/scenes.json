@@ -261,8 +261,7 @@
       "slide": "build",
       "narration": [
         "In building it, WorkBuddy was most valuable as an independent QA tester, given only the bank's test data and the outcome rules.",
-        "Our tip: give WorkBuddy one well-specified job outside the code, like test cases from a spec. Those came back within half an hour, while three coding tasks stalled, even one small function.",
-        "So use a second AI as your tester, not just your coder. The app itself was written with Claude Code, with over thirteen hundred automated tests."
+        "Its cases included ones we had not thought of: two payees called John, a scam message pasted in, a misspelt share name."
       ]
     },
     {
