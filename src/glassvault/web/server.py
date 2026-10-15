@@ -171,7 +171,8 @@ def new_demo(visitor: str | None = None) -> Demo:
 
 
 demo = new_demo()  # the one shared demo, unless GV_SESSIONS gives each visitor their own
-app = FastAPI(title="Glass Vault demo")
+# No /docs, /redoc or /openapi.json: the page's JSON calls are not an API for visitors to browse.
+app = FastAPI(title="Glass Vault demo", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

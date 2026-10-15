@@ -38,6 +38,8 @@ def test_anyone_with_the_link_gets_in_and_the_health_check_answers(server, monke
             assert opened.status_code == 200 and "www-authenticate" not in opened.headers
         assert client.post("/api/message", json={"text": "Send mum 300"}).status_code == 200
         assert client.get("/healthz").json() == {"status": "ok"}  # for the container's health check
+        for path in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
+            assert client.get(path).status_code == 404, path  # no generated API docs
 
 
 def test_each_visitor_has_a_demo_of_their_own(server, monkeypatch):
